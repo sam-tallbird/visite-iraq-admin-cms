@@ -3,7 +3,7 @@
 import Shell from "@/components/layout/shell";
 import { useEffect, useState } from "react";
 import { db } from "@/lib/firebase";
-import { collection, getDocs } from "firebase/firestore";
+import { collection, getDocs, Firestore } from "firebase/firestore";
 import { 
   Building2, 
   Landmark, 
@@ -159,8 +159,14 @@ export default function DashboardPage() {
   useEffect(() => {
     const fetchStats = async () => {
       try {
+        if (!db) {
+          console.error("Firestore is not initialized");
+          setLoading(false);
+          return;
+        }
+
         // Fetch collections count from Firestore
-        const listingsSnapshot = await getDocs(collection(db, "listings"));
+        const listingsSnapshot = await getDocs(collection(db as Firestore, "listings"));
         const totalListings = listingsSnapshot.size;
         
         // Count by category
@@ -184,7 +190,7 @@ export default function DashboardPage() {
         });
         
         // Get users count
-        const usersSnapshot = await getDocs(collection(db, "users"));
+        const usersSnapshot = await getDocs(collection(db as Firestore, "users"));
         const usersCount = usersSnapshot.size;
         
         setStats({
@@ -200,10 +206,7 @@ export default function DashboardPage() {
       } catch (error) {
         console.error("Error fetching stats:", error);
       } finally {
-        // Simulate a slight delay to show loading state
-        setTimeout(() => {
-          setLoading(false);
-        }, 1000);
+        setLoading(false);
       }
     };
 
