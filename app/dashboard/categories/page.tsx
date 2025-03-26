@@ -37,6 +37,12 @@ export default function CategoriesPage() {
 
   // Check authentication state
   useEffect(() => {
+    if (!auth) {
+      console.log("Auth not initialized, redirecting to login");
+      router.push("/auth/login");
+      return;
+    }
+
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setIsAuthChecking(false);
       if (user) {
