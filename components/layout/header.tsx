@@ -11,7 +11,7 @@ interface HeaderProps {
 }
 
 export default function Header({ toggleMobileMenu }: HeaderProps) {
-  const { user, logout } = useAuth();
+  const { user, signOut } = useAuth();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [mounted, setMounted] = useState(false);
@@ -41,7 +41,7 @@ export default function Header({ toggleMobileMenu }: HeaderProps) {
 
   const handleLogout = async () => {
     try {
-      await logout();
+      await signOut();
     } catch (error) {
       console.error("Logout error:", error);
     } finally {
