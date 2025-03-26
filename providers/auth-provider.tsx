@@ -7,7 +7,8 @@ import {
   signOut as firebaseSignOut,
   onAuthStateChanged,
   setPersistence,
-  browserLocalPersistence
+  browserLocalPersistence,
+  Auth
 } from "firebase/auth";
 import { useRouter, usePathname } from "next/navigation";
 import { auth } from "@/lib/firebase";
@@ -36,7 +37,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const setAuthCookie = async (user: User | null) => {
     if (user) {
       try {
-        // Instead of using getIdToken which is causing errors, we'll just use a boolean
         Cookies.set('auth-token', 'authenticated', { expires: 7, path: '/' });
       } catch (error) {
         console.error("Error setting auth cookie:", error);
@@ -48,37 +48,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Set auth persistence to local (survives browser restarts)
   useEffect(() => {
-    if (auth) {
-      setPersistence(auth, browserLocalPersistence)
-        .catch((error) => {
-          console.error("Auth persistence error:", error);
-        });
-    }
+    const initAuth = async () => {
+      if (!auth) return;
+      try {
+        await setPersistence(auth as Auth, browserLocalPersistence);
+      } catch (error) {
+        console.error("Auth persistence error:", error);
+      }
+    };
+    
+    initAuth();
   }, []);
 
   // Check if user is authenticated and handle protected routes
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
+    if (!auth) return;
+
+    const unsubscribe = onAuthStateChanged(auth as Auth, (user) => {
       setUser(user);
       setLoading(false);
-      
-      // Determine if the user is admin (in a real app, you might check claims or roles)
       setIsAdmin(!!user);
       
-      // Handle redirects based on auth state
       if (!user) {
-        // If user is not authenticated and trying to access protected routes
         if (pathname && pathname.startsWith('/dashboard')) {
           router.push('/auth/login');
         }
       } else {
-        // If user is authenticated and on auth pages, redirect to dashboard
         if (pathname === '/auth/login') {
           router.push('/dashboard');
         }
       }
       
-      // Set or remove the auth cookie based on user state
       setAuthCookie(user);
     });
 
@@ -86,13 +86,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [router, pathname]);
 
   const signIn = async (email: string, password: string) => {
+    if (!auth) throw new Error("Auth not initialized");
+
     try {
       setLoading(true);
       setError(null);
       
-      const result = await signInWithEmailAndPassword(auth, email, password);
+      const result = await signInWithEmailAndPassword(auth as Auth, email, password);
       setUser(result.user);
-      setIsAdmin(true); // Assume all authenticated users are admin for now
+      setIsAdmin(true);
       await setAuthCookie(result.user);
       router.push('/dashboard');
     } catch (error: any) {
@@ -104,8 +106,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signOut = async () => {
+    if (!auth) throw new Error("Auth not initialized");
+
     try {
-      await firebaseSignOut(auth);
+      await firebaseSignOut(auth as Auth);
       setUser(null);
       setIsAdmin(false);
       Cookies.remove('auth-token', { path: '/' });
