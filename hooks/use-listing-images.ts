@@ -1,256 +1,248 @@
 import { useState, useCallback, useEffect } from 'react';
-import { 
-  collection, 
-  query, 
-  where, 
-  getDocs, 
-  addDoc, 
-  updateDoc, 
-  deleteDoc,
-  doc,
-  Timestamp,
-  DocumentData,
-  FirestoreError,
-  Firestore
-} from 'firebase/firestore';
-import { db as firestoreDB, firebaseInitialized } from '@/lib/firebase';
-import { useFirebaseStorage } from './use-firebase-storage';
+import { useAuth } from '@/providers/auth-provider';
+import type { PostgrestError } from '@supabase/supabase-js';
 
-// Set proper type for the variable to avoid TS errors
-const db = firestoreDB as Firestore;
-
-export interface ListingImage {
-  id?: string;
-  image_url: string;
+// Interface based on assumed 'media' table structure
+export interface ListingMedia {
+  id?: string; // Supabase returns string UUIDs
   listing_id: string;
-  caption_en: string;
-  caption_ar: string;
-  is_primary: boolean;
-  created_at?: Timestamp;
+  url: string;
+  file_path?: string | null; // Path within the bucket (NEW)
+  is_primary?: boolean; // NEW
+  order_index?: number; // NEW
+  description?: string | null; // Optional description
+  media_type?: string; // Optional: e.g., 'image', 'video'
+  created_at?: string; // Supabase returns ISO string timestamps
 }
 
-interface UseListingImagesResult {
-  images: ListingImage[];
+// Result type using Supabase types
+interface UseListingMediaResult {
+  media: ListingMedia[];
   loading: boolean;
-  error: FirestoreError | null;
-  addImage: (imageData: Omit<ListingImage, 'id' | 'created_at'>) => Promise<string | null>;
-  updateImage: (id: string, imageData: Partial<ListingImage>) => Promise<void>;
-  deleteImage: (id: string) => Promise<void>;
-  setPrimaryImage: (id: string) => Promise<void>;
-  fetchImages: (listingId: string) => Promise<void>;
+  error: PostgrestError | Error | null; // Can be Postgrest or other errors
+  addMedia: (mediaData: Omit<ListingMedia, 'id' | 'created_at'>) => Promise<string | null>;
+  updateMedia: (id: string, mediaData: Partial<Omit<ListingMedia, 'id' | 'listing_id' | 'created_at'>>) => Promise<void>;
+  deleteMedia: (id: string) => Promise<void>;
+  setPrimaryMedia: (id: string) => Promise<void>;
+  fetchMedia: (listingId: string) => Promise<void>;
 }
 
-export function useListingImages(listingId?: string): UseListingImagesResult {
-  const [images, setImages] = useState<ListingImage[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<FirestoreError | null>(null);
-  const { deleteFile } = useFirebaseStorage();
+export const STORAGE_BUCKET_NAME = 'listing-media'; // <<<--- CHANGE THIS if your bucket name is different
 
-  const fetchImages = useCallback(async (fetchListingId: string) => {
-    if (!firebaseInitialized || !db) {
-      console.error('Firestore not initialized');
-      return;
-    }
+/**
+ * Hook to manage media items (images/videos) for a specific listing in Supabase.
+ */
+export function useListingMedia(listingId?: string): UseListingMediaResult {
+  const { supabase } = useAuth(); // Get Supabase client
+  const [media, setMedia] = useState<ListingMedia[]>([]);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<PostgrestError | Error | null>(null);
+
+  const fetchMedia = useCallback(async (fetchListingId: string) => {
+    if (!supabase) return;
 
     setLoading(true);
     setError(null);
 
     try {
-      const q = query(
-        collection(db, 'listing_images'),
-        where('listing_id', '==', fetchListingId)
-      );
+      const { data, error: fetchError } = await supabase
+        .from('media')
+        .select('*')
+        .eq('listing_id', fetchListingId)
+        .order('is_primary', { ascending: false }) // Primary first
+        .order('order_index', { ascending: true, nullsFirst: false }) // Then by order_index
+        .order('created_at', { ascending: true }); // Finally by creation time
 
-      const querySnapshot = await getDocs(q);
-      const fetchedImages: ListingImage[] = [];
+      if (fetchError) throw fetchError;
 
-      querySnapshot.forEach((doc) => {
-        fetchedImages.push({
-          id: doc.id,
-          ...doc.data() as Omit<ListingImage, 'id'>
-        });
-      });
-
-      // Sort images so primary is first
-      fetchedImages.sort((a, b) => {
-        if (a.is_primary && !b.is_primary) return -1;
-        if (!a.is_primary && b.is_primary) return 1;
-        return 0;
-      });
-
-      setImages(fetchedImages);
-    } catch (err) {
-      console.error('Error fetching listing images:', err);
-      setError(err as FirestoreError);
+      setMedia(data || []);
+    } catch (err: any) {
+      console.error('Error fetching listing media:', err);
+      setError(err as PostgrestError | Error);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [supabase]);
 
   // Initial fetch if listingId is provided
   useEffect(() => {
-    if (listingId) {
-      fetchImages(listingId);
+    if (listingId && supabase) {
+      fetchMedia(listingId);
     }
-  }, [listingId, fetchImages]);
+    // Clear media if listingId changes or supabase becomes unavailable
+    if (!listingId || !supabase) {
+        setMedia([]);
+    }
+  }, [listingId, supabase, fetchMedia]);
 
-  const addImage = useCallback(async (imageData: Omit<ListingImage, 'id' | 'created_at'>) => {
-    if (!firebaseInitialized || !db) {
-      console.error('Firestore not initialized');
+  // Helper to ensure only one primary media item per listing
+  const ensureSinglePrimary = async (listingId: string, currentPrimaryId?: string) => {
+    if (!supabase) return;
+    const { error: updateError } = await supabase
+        .from('media')
+        .update({ is_primary: false })
+        .eq('listing_id', listingId)
+        .neq('id', currentPrimaryId || '00000000-0000-0000-0000-000000000000'); // Exclude the one being set (if any)
+
+    if (updateError) {
+        console.error("Error ensuring single primary media:", updateError);
+        throw updateError;
+    }
+  };
+
+  const addMedia = useCallback(async (mediaData: Omit<ListingMedia, 'id' | 'created_at'>) => {
+    if (!supabase) return null;
+    setLoading(true);
+    setError(null);
+
+    try {
+      // Ensure only one primary if this one is set to primary
+      if (mediaData.is_primary) {
+        await ensureSinglePrimary(mediaData.listing_id);
+      }
+       // If it's the first media item, make it primary (optional - depends on desired UX)
+      // We might rely on the UI calling setPrimaryMedia instead for clearer control.
+      // if (media.length === 0) {
+      //   mediaData.is_primary = true;
+      // }
+
+      // created_at is handled by DB default
+      const { data: insertedData, error: insertError } = await supabase
+        .from('media')
+        .insert(mediaData)
+        .select()
+        .single();
+
+      if (insertError) throw insertError;
+
+      await fetchMedia(mediaData.listing_id); // Refresh the list
+      return insertedData?.id || null;
+
+    } catch (err: any) {
+      console.error('Error adding media:', err);
+      setError(err as PostgrestError | Error);
+      setLoading(false);
       return null;
     }
+  }, [supabase, fetchMedia]); // Removed media dependency to avoid potential stale state issues
+
+  const updateMedia = useCallback(async (id: string, mediaData: Partial<Omit<ListingMedia, 'id' | 'listing_id' | 'created_at'>>) => {
+    if (!supabase) return;
+    setLoading(true);
+    setError(null);
 
     try {
-      // If this is the first image or is_primary is true, 
-      // ensure no other images are primary
-      if (imageData.is_primary && images.length > 0) {
-        await Promise.all(
-          images
-            .filter(img => img.is_primary && img.id)
-            .map(img => updateDoc(doc(db, 'listing_images', img.id!), { is_primary: false }))
-        );
+      // Find the listing_id for the item being updated
+      const currentItem = media.find(m => m.id === id);
+      if (!currentItem) throw new Error('Media item not found in current state');
+
+      // Ensure only one primary if this one is being set to primary
+      if (mediaData.is_primary) {
+        await ensureSinglePrimary(currentItem.listing_id, id);
       }
 
-      // If this is the first image, make it primary
-      if (images.length === 0) {
-        imageData.is_primary = true;
-      }
+      // updated_at should be handled by DB trigger/default
+      const { error: updateError } = await supabase
+        .from('media')
+        .update(mediaData)
+        .eq('id', id);
 
-      const docRef = await addDoc(collection(db, 'listing_images'), {
-        ...imageData,
-        created_at: Timestamp.now()
-      });
+      if (updateError) throw updateError;
 
-      const newImage: ListingImage = {
-        id: docRef.id,
-        ...imageData,
-        created_at: Timestamp.now()
-      };
-
-      setImages(prev => {
-        // If new image is primary, make sure others are not
-        if (newImage.is_primary) {
-          return [newImage, ...prev.map(img => ({ ...img, is_primary: false }))];
-        }
-        return [...prev, newImage];
-      });
-
-      return docRef.id;
-    } catch (err) {
-      console.error('Error adding image:', err);
-      setError(err as FirestoreError);
-      return null;
+      await fetchMedia(currentItem.listing_id); // Refresh the list
+    } catch (err: any) {
+      console.error('Error updating media:', err);
+      setError(err as PostgrestError | Error);
+    } finally {
+      setLoading(false);
     }
-  }, [images]);
+  }, [supabase, fetchMedia, media]); // Added media dependency to find listing_id
 
-  const updateImage = useCallback(async (id: string, imageData: Partial<ListingImage>) => {
-    if (!firebaseInitialized || !db) {
-      console.error('Firestore not initialized');
+  const deleteMedia = useCallback(async (id: string) => {
+    if (!supabase) return;
+    setLoading(true);
+    setError(null);
+
+    // Find the item to get URL and listing_id before deleting from DB
+    const itemToDelete = media.find(m => m.id === id);
+    if (!itemToDelete) {
+      setError(new Error('Media item not found to delete.'));
+      setLoading(false);
       return;
     }
+    const listingIdToDeleteFrom = itemToDelete.listing_id;
 
     try {
-      // If updating to primary, ensure no other images are primary
-      if (imageData.is_primary) {
-        await Promise.all(
-          images
-            .filter(img => img.is_primary && img.id !== id && img.id)
-            .map(img => updateDoc(doc(db, 'listing_images', img.id!), { is_primary: false }))
-        );
-      }
+      // 1. Delete DB record
+      const { error: deleteDbError } = await supabase
+        .from('media')
+        .delete()
+        .eq('id', id);
 
-      const docRef = doc(db, 'listing_images', id);
-      await updateDoc(docRef, imageData);
+      if (deleteDbError) throw deleteDbError;
 
-      setImages(prev => {
-        const updatedImages = prev.map(img => {
-          if (img.id === id) {
-            return { ...img, ...imageData };
-          }
-          // If setting a new primary, make sure others are not primary
-          if (imageData.is_primary && img.id !== id) {
-            return { ...img, is_primary: false };
-          }
-          return img;
-        });
-
-        // Sort images so primary is first
-        updatedImages.sort((a, b) => {
-          if (a.is_primary && !b.is_primary) return -1;
-          if (!a.is_primary && b.is_primary) return 1;
-          return 0;
-        });
-
-        return updatedImages;
-      });
-    } catch (err) {
-      console.error('Error updating image:', err);
-      setError(err as FirestoreError);
-    }
-  }, [images]);
-
-  const deleteImage = useCallback(async (id: string) => {
-    if (!firebaseInitialized || !db) {
-      console.error('Firestore not initialized');
-      return;
-    }
-
-    try {
-      // Get the image before deleting to check if it's primary
-      const imageToDelete = images.find(img => img.id === id);
-      if (!imageToDelete) {
-        console.error('Image not found');
-        return;
-      }
-
-      // Delete from Firestore
-      const docRef = doc(db, 'listing_images', id);
-      await deleteDoc(docRef);
-
-      // Try to delete the file from Storage if we can parse the URL
+      // 2. Delete file from Storage
       try {
-        // Extract the path from the image URL
-        const url = new URL(imageToDelete.image_url);
-        const pathMatch = url.pathname.match(/\/o\/(.+?)(?:\?|$)/);
-        if (pathMatch && pathMatch[1]) {
-          const path = decodeURIComponent(pathMatch[1]);
-          await deleteFile(path);
+        // Extract path from Supabase URL (adjust if your URLs differ)
+        // Example URL: https://<project_ref>.supabase.co/storage/v1/object/public/listing-media/listing_uuid/image.jpg
+        const url = new URL(itemToDelete.url);
+        // Path becomes: listing_uuid/image.jpg (after bucket name)
+        const pathToRemove = url.pathname.split(`/${STORAGE_BUCKET_NAME}/`)[1];
+        if (pathToRemove) {
+          const { error: deleteStorageError } = await supabase
+            .storage
+            .from(STORAGE_BUCKET_NAME)
+            .remove([pathToRemove]);
+          if (deleteStorageError) {
+            console.warn('Failed to delete file from storage:', deleteStorageError);
+            // Optionally set a non-critical error state here
+          }
+        } else {
+             console.warn('Could not extract path from URL to delete from storage:', itemToDelete.url);
         }
       } catch (storageErr) {
-        console.error('Could not delete file from storage:', storageErr);
-        // Continue even if storage delete fails
+        console.warn('Error processing storage deletion:', storageErr);
+         // Non-critical, continue after DB delete attempt
       }
 
-      // Update local state
-      const updatedImages = images.filter(img => img.id !== id);
-      
-      // If we deleted the primary image and there are other images,
-      // make the first remaining image primary
-      if (imageToDelete.is_primary && updatedImages.length > 0) {
-        const newPrimaryId = updatedImages[0].id!;
-        await updateDoc(doc(db, 'listing_images', newPrimaryId), { is_primary: true });
-        updatedImages[0].is_primary = true;
+      // 3. Check if primary was deleted and update if necessary
+      const remainingMedia = media.filter(m => m.id !== id);
+      if (itemToDelete.is_primary && remainingMedia.length > 0) {
+          const nextPrimary = remainingMedia.sort((a, b) => (a.order_index ?? 999) - (b.order_index ?? 999))[0]; // Pick first by order_index
+          if (nextPrimary?.id) {
+              const { error: updatePrimaryError } = await supabase
+                .from('media')
+                .update({ is_primary: true })
+                .eq('id', nextPrimary.id);
+              if (updatePrimaryError) {
+                  console.warn('Failed to set new primary image after deletion:', updatePrimaryError);
+              }
+          }
       }
 
-      setImages(updatedImages);
-    } catch (err) {
-      console.error('Error deleting image:', err);
-      setError(err as FirestoreError);
+      await fetchMedia(listingIdToDeleteFrom); // Refresh the list
+
+    } catch (err: any) {
+      console.error('Error deleting media:', err);
+      setError(err as PostgrestError | Error);
+       setLoading(false);
     }
-  }, [db, deleteFile, images]);
+  }, [supabase, fetchMedia, media]);
 
-  const setPrimaryImage = useCallback(async (id: string) => {
-    await updateImage(id, { is_primary: true });
-  }, [updateImage]);
+  const setPrimaryMedia = useCallback(async (id: string) => {
+      if (!id) return;
+      // Update using the main update function which handles ensuring single primary
+      await updateMedia(id, { is_primary: true });
+  }, [updateMedia]);
 
   return {
-    images,
+    media,
     loading,
     error,
-    addImage,
-    updateImage,
-    deleteImage,
-    setPrimaryImage,
-    fetchImages
+    addMedia,
+    updateMedia,
+    deleteMedia,
+    setPrimaryMedia,
+    fetchMedia,
   };
 } 

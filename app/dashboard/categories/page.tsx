@@ -1,197 +1,378 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Shell from "@/components/layout/shell";
-import { useFirestoreCollection } from "@/hooks/use-firestore";
+import { useCategories, Category } from "@/hooks/use-categories";
+import { useSupabaseTable } from "@/hooks/use-supabase";
 import { Edit, Trash2, Plus, Loader2, AlertCircle, RefreshCw, ImageIcon } from "lucide-react";
-import { where, orderBy, DocumentData } from "firebase/firestore";
-import { auth } from "@/lib/firebase";
-import { onAuthStateChanged } from "firebase/auth";
 import { ImageUpload } from "@/components/ImageUpload";
 import Image from "next/image";
+import { useAuth } from "@/providers/auth-provider";
 
-interface Category {
-  id: string;
-  name_en: string;
-  name_ar: string;
-  imageUrl?: string;
-  created_at: any;
-  updated_at: any;
+// Interface for combined Category + Translation data
+interface DisplayCategory extends Category {
+  name_en?: string;
+  name_ar?: string;
+  description_en?: string;
+  description_ar?: string;
+  icon_url?: string; // Consistent name
+  translation_en_id?: string;
+  translation_ar_id?: string;
 }
+
+// Interface for translation table data
+interface CategoryTranslation {
+    id?: string;
+    category_id: string;
+    language_code: string;
+    name?: string;
+    description?: string;
+    icon_url?: string;
+    slug?: string;
+}
+
+const CATEGORY_IMAGE_BUCKET = 'category-icons'; // <<<--- Adjust if needed
 
 export default function CategoriesPage() {
   const router = useRouter();
+  const { user, loading: authLoading, supabase } = useAuth();
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<DisplayCategory | null>(null);
   const [nameEn, setNameEn] = useState("");
   const [nameAr, setNameAr] = useState("");
   const [imageUrl, setImageUrl] = useState("");
   const [retryCount, setRetryCount] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [isAuthChecking, setIsAuthChecking] = useState(true);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [shouldRefresh, setShouldRefresh] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Check authentication state
+  // Fetch base categories
+  const { 
+      categories: baseCategories, 
+      loading: categoriesLoading, 
+      error: categoriesError,
+      refresh: refreshCategories
+  } = useCategories();
+
+  // Fetch all translations (filter/join in useEffect)
+  const { 
+      data: allTranslations, 
+      status: translationsStatus,  
+      error: translationsError,
+      refresh: refreshTranslations,
+      add: addTranslation,
+      update: updateTranslationRow, 
+      remove: removeTranslation 
+  } = useSupabaseTable('category_translations');
+  
+  // Get functions for the base 'categories' table for add/delete
+  const { 
+      add: addBaseCategory,
+      remove: removeBaseCategory 
+  } = useSupabaseTable('categories');
+
+  // State to hold the combined/display categories
+  const [displayCategories, setDisplayCategories] = useState<DisplayCategory[]>([]);
+
+  // Combine base categories with translations
   useEffect(() => {
-    if (!auth) {
-      console.log("Auth not initialized, redirecting to login");
-      router.push("/auth/login");
-      return;
-    }
-
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setIsAuthChecking(false);
-      if (user) {
-        setIsAuthenticated(true);
-      } else {
-        console.log("No authenticated user, redirecting to login");
-        router.push("/auth/login");
+      if (baseCategories && allTranslations) {
+          const combined = baseCategories.map(cat => {
+              const en = allTranslations.find(t => t.category_id === cat.id && t.language_code === 'en');
+              const ar = allTranslations.find(t => t.category_id === cat.id && t.language_code === 'ar');
+              return {
+                  ...cat,
+                  name_en: en?.name,
+                  name_ar: ar?.name,
+                  description_en: en?.description,
+                  description_ar: ar?.description,
+                  icon_url: en?.icon_url || ar?.icon_url, // Prefer EN icon?
+                  translation_en_id: en?.id,
+                  translation_ar_id: ar?.id,
+              } as DisplayCategory;
+          });
+          // Sort combined categories if needed (e.g., by order or name)
+          combined.sort((a, b) => (a.order ?? 999) - (b.order ?? 999) || (a.name_en ?? '').localeCompare(b.name_en ?? ''));
+          setDisplayCategories(combined);
       }
-    });
-    
-    return () => unsubscribe();
-  }, [router]);
+  }, [baseCategories, allTranslations]);
 
-  const {
-    data: categories,
-    status,
-    error,
-    refresh,
-    add: addCategory,
-    update: updateCategory,
-    remove: removeCategory,
-  } = useFirestoreCollection("categories", [orderBy("created_at", "desc")], {
-    onError: (error) => {
-      console.error("Firestore error:", error);
-      setErrorMessage(`Error loading categories: ${error.message}`);
-      
-      // If the error is authentication related, redirect to login
-      if (error.code === 'permission-denied' || error.code === 'unauthenticated') {
-        router.push("/auth/login");
-      }
-    }
+  // Derive loading state from hooks
+  const loading = authLoading || categoriesLoading || translationsStatus === 'loading';
+  const combinedError = categoriesError || translationsError;
+
+  // DEBUG LOG
+  console.log(`[CategoriesPage] Loading States:`, {
+      authLoading,
+      categoriesLoading,
+      translationsStatus,
+      calculatedLoading: loading,
+      combinedError
   });
 
-  // Handle retries for loading if connection fails - using a separate state to trigger refresh
+  // Redirect if not authenticated (after auth check is complete)
   useEffect(() => {
-    if ((status === "error" || status === "connection-error") && retryCount < 3) {
-      const timer = setTimeout(() => {
-        console.log(`Retrying categories fetch (attempt ${retryCount + 1})...`);
-        setRetryCount(prev => prev + 1);
-        setShouldRefresh(true);
-      }, 3000); // Retry after 3 seconds
-      
-      return () => clearTimeout(timer);
-    }
-  }, [status, retryCount]); // Remove refresh from dependencies
+      if (!authLoading && !user) {
+          router.push("/auth/login");
+      }
+  }, [authLoading, user, router]);
 
-  // Handle the actual refresh in a separate effect to avoid infinite loops
-  useEffect(() => {
-    if (shouldRefresh) {
-      refresh();
-      setShouldRefresh(false);
-    }
-  }, [shouldRefresh, refresh]);
+  // Refresh all data
+  const refreshAll = useCallback(() => {
+      refreshCategories();
+      refreshTranslations();
+  }, [refreshCategories, refreshTranslations]);
+
+  // Handler for ImageUpload component
+  const handleImageUpload = (uploadResult: { url: string; filePath: string } | string | null) => {
+      if (typeof uploadResult === 'object' && uploadResult !== null) {
+          setImageUrl(uploadResult.url || ""); // Extract URL if it's an object
+      } else if (typeof uploadResult === 'string') {
+          setImageUrl(uploadResult); // Use directly if it's a string
+      } else {
+          setImageUrl(""); // Handle null case
+      }
+  };
 
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setErrorMessage(null);
+    if (!supabase || !addBaseCategory || !addTranslation) {
+        setErrorMessage("Database functions not ready.");
+        return;
+    }
+    if (!nameEn.trim() || !nameAr.trim()) {
+        setErrorMessage("English and Arabic names are required.");
+        return;
+    }
     
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    let newCategoryId: string | null = null;
+
     try {
-      if (nameEn.trim() && nameAr.trim()) {
-        await addCategory({
-          name_en: nameEn.trim(),
-          name_ar: nameAr.trim(),
-          imageUrl: imageUrl || null,
-        });
+        // 1. Add base category (can be minimal if most data is in translations)
+        // Add fields like 'order' here if they exist on the base table
+        const baseCategoryData = { 
+            // order: someOrderValue // Example
+        };
+        const insertedBaseCategory = await addBaseCategory(baseCategoryData);
         
-        setNameEn("");
+        if (!insertedBaseCategory || !insertedBaseCategory.id) {
+            throw new Error("Failed to create base category entry.");
+        }
+        newCategoryId = insertedBaseCategory.id as string;
+
+        // 2. Add English translation
+        const translationEnData = {
+            category_id: newCategoryId,
+            language_code: 'en',
+            name: nameEn.trim(),
+            // description: descriptionEn, // Add if you have description inputs
+            icon_url: imageUrl || null, // Save the uploaded image URL
+            // slug: generateSlug(nameEn.trim()) // Add slug generation if needed
+        };
+        const insertedEn = await addTranslation(translationEnData);
+        if (!insertedEn) throw new Error("Failed to add English translation.");
+        
+        // 3. Add Arabic translation
+        const translationArData = {
+            category_id: newCategoryId,
+            language_code: 'ar',
+            name: nameAr.trim(),
+            // description: descriptionAr, 
+            icon_url: imageUrl || null, // Typically store icon once, maybe only on EN?
+            // slug: generateSlug(nameAr.trim()) 
+        };
+        const insertedAr = await addTranslation(translationArData);
+         if (!insertedAr) throw new Error("Failed to add Arabic translation.");
+
+        // 4. Success
+        refreshAll(); // Refresh data
+        setNameEn(""); // Clear form
         setNameAr("");
         setImageUrl("");
-        setIsAddModalOpen(false);
-      }
-    } catch (error) {
-      setErrorMessage(`Failed to add category: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        setIsAddModalOpen(false); // Close modal
+
+    } catch (error: any) {
+        console.error("Error adding category:", error);
+        setErrorMessage(`Failed to add category: ${error.message}`);
+        // Optional: Add rollback logic here if needed (delete base category if translations failed)
+    } finally {
+        setIsSubmitting(false);
     }
   };
 
   const handleEditSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!selectedCategory || !selectedCategory.id) {
+        setErrorMessage("No category selected for editing.");
+        return;
+    }
+    if (!supabase || !updateTranslationRow) {
+        setErrorMessage("Database functions not ready.");
+        return;
+    }
+    if (!nameEn.trim() || !nameAr.trim()) {
+        setErrorMessage("English and Arabic names are required.");
+        return;
+    }
+
+    setIsSubmitting(true);
     setErrorMessage(null);
-    
+
     try {
-      if (selectedCategory && nameEn.trim() && nameAr.trim()) {
-        await updateCategory(selectedCategory.id, {
-          name_en: nameEn.trim(),
-          name_ar: nameAr.trim(),
-          imageUrl: imageUrl || null,
-        });
+        let updateEnPromise: Promise<any> | null = null;
+        let updateArPromise: Promise<any> | null = null;
+
+        // Update English translation
+        if (selectedCategory.translation_en_id) {
+            const updateEnData = {
+                name: nameEn.trim(),
+                icon_url: imageUrl || null // Update icon URL on EN translation
+                // Add description, slug updates if needed
+            };
+            updateEnPromise = updateTranslationRow(selectedCategory.translation_en_id, updateEnData);
+        } else {
+            // Handle case where EN translation doesn't exist (e.g., add it?)
+            console.warn("English translation ID missing for category:", selectedCategory.id);
+            // Optionally, could call addTranslation here
+        }
+
+        // Update Arabic translation
+        if (selectedCategory.translation_ar_id) {
+            const updateArData = {
+                name: nameAr.trim()
+                 // Add description, slug updates if needed
+                // Typically icon is not updated on AR if primarily stored on EN
+            };
+            updateArPromise = updateTranslationRow(selectedCategory.translation_ar_id, updateArData);
+        } else {
+            // Handle case where AR translation doesn't exist
+             console.warn("Arabic translation ID missing for category:", selectedCategory.id);
+             // Optionally, could call addTranslation here
+        }
         
+        // Wait for both updates to complete
+        await Promise.all([updateEnPromise, updateArPromise].filter(p => p !== null));
+
+        // Success
+        refreshAll();
         setSelectedCategory(null);
         setNameEn("");
         setNameAr("");
         setImageUrl("");
         setIsEditModalOpen(false);
-      }
-    } catch (error) {
-      setErrorMessage(`Failed to update category: ${error instanceof Error ? error.message : 'Unknown error'}`);
+
+    } catch (error: any) {
+        console.error("Error updating category:", error);
+        setErrorMessage(`Failed to update category: ${error.message}`);
+    } finally {
+        setIsSubmitting(false);
     }
   };
 
   const handleDeleteConfirm = async () => {
+    if (!selectedCategory || !selectedCategory.id) {
+        setErrorMessage("No category selected for deletion.");
+        return;
+    }
+    if (!supabase || !removeBaseCategory) {
+        setErrorMessage("Database functions not ready for deletion.");
+        return;
+    }
+
+    setIsSubmitting(true);
     setErrorMessage(null);
-    
+
     try {
-      if (selectedCategory) {
-        await removeCategory(selectedCategory.id);
+        // 1. Delete Icon from Storage (if exists)
+        if (selectedCategory.icon_url) {
+            try {
+                const url = new URL(selectedCategory.icon_url);
+                // Assuming URL structure like: .../storage/v1/object/public/category-icons/image.png
+                const path = url.pathname.split(`/${CATEGORY_IMAGE_BUCKET}/`)[1];
+                if (path) {
+                    const { error: storageError } = await supabase.storage
+                        .from(CATEGORY_IMAGE_BUCKET)
+                        .remove([path]);
+                    if (storageError) {
+                        console.warn("Could not delete category icon from storage:", storageError);
+                        // Optionally: set a non-blocking warning message
+                    }
+                } else {
+                     console.warn("Could not extract path from icon URL:", selectedCategory.icon_url);
+                }
+            } catch (e) {
+                console.warn("Error processing icon URL for deletion:", selectedCategory.icon_url, e);
+            }
+        }
+
+        // 2. Delete Translations (using supabase client directly for batch delete)
+        const { error: deleteTransError } = await supabase
+            .from('category_translations')
+            .delete()
+            .eq('category_id', selectedCategory.id);
+        
+        if (deleteTransError) {
+            console.warn("Error deleting category translations:", deleteTransError);
+            // Decide if this should block the base category deletion or just warn
+            // Throwing error here would stop the process if desired:
+            // throw new Error(`Failed to delete translations: ${deleteTransError.message}`);
+        }
+
+        // 3. Delete Base Category Row
+        await removeBaseCategory(selectedCategory.id);
+
+        // 4. Success
+        refreshAll();
         setSelectedCategory(null);
         setIsDeleteModalOpen(false);
-      }
-    } catch (error) {
-      setErrorMessage(`Failed to delete category: ${error instanceof Error ? error.message : 'Unknown error'}`);
+
+    } catch (error: any) {
+        console.error("Error deleting category:", error);
+        setErrorMessage(`Failed to delete category: ${error.message}`);
+    } finally {
+        setIsSubmitting(false);
     }
   };
 
   const handleRetry = () => {
     setErrorMessage(null);
-    setRetryCount(0);
-    refresh();
+    refreshAll();
   };
 
-  const openEditModal = (category: Category) => {
+  const openEditModal = (category: DisplayCategory) => {
     setSelectedCategory(category);
-    setNameEn(category.name_en);
-    setNameAr(category.name_ar);
-    setImageUrl(category.imageUrl || "");
+    setNameEn(category.name_en || "");
+    setNameAr(category.name_ar || "");
+    setImageUrl(category.icon_url || "");
     setIsEditModalOpen(true);
   };
 
-  const openDeleteModal = (category: Category) => {
+  const openDeleteModal = (category: DisplayCategory) => {
     setSelectedCategory(category);
     setIsDeleteModalOpen(true);
   };
 
-  // Display loading state while checking auth
-  if (isAuthChecking) {
+  // Show loading skeleton or spinner
+  if (loading) {
     return (
       <Shell>
         <div className="flex h-96 items-center justify-center">
           <div className="flex flex-col items-center gap-4">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
-            <p className="text-muted-foreground">Verifying your session...</p>
+            <p className="text-muted-foreground">Loading categories...</p>
           </div>
         </div>
       </Shell>
     );
   }
-
-  // Don't try to render the page content if not authenticated
-  if (!isAuthenticated) {
-    return null; // Return nothing while redirecting
+  
+  // Don't render further if auth check hasn't finished or user is null
+  if (authLoading || !user) {
+      return null; 
   }
 
   return (
@@ -228,139 +409,86 @@ export default function CategoriesPage() {
           </div>
         )}
 
-        {status === "loading" ? (
-          <div className="flex h-96 items-center justify-center">
-            <div className="flex flex-col items-center gap-4">
-              <Loader2 className="h-8 w-8 animate-spin text-primary" />
-              <p className="text-muted-foreground">Loading categories...</p>
-            </div>
-          </div>
-        ) : status === "connection-error" ? (
-          <div className="flex h-96 flex-col items-center justify-center gap-4 text-center">
-            <AlertCircle className="h-12 w-12 text-destructive" />
-            <div>
-              <h3 className="text-xl font-semibold">Connection Error</h3>
-              <p className="text-muted-foreground">
-                Could not connect to the database. Please check your connection.
-              </p>
-            </div>
-            <button 
-              onClick={handleRetry}
-              className="btn btn-primary mt-2"
-            >
-              <RefreshCw className="mr-2 h-4 w-4" />
-              Try Again
-            </button>
-          </div>
-        ) : status === "error" ? (
-          <div className="flex h-96 flex-col items-center justify-center gap-4 text-center">
-            <AlertCircle className="h-12 w-12 text-destructive" />
-            <div>
-              <h3 className="text-xl font-semibold">Error Loading Categories</h3>
-              <p className="text-muted-foreground">
-                {error?.message || "An unknown error occurred."}
-              </p>
-            </div>
-            <button 
-              onClick={handleRetry}
-              className="btn btn-primary mt-2"
-            >
-              <RefreshCw className="mr-2 h-4 w-4" />
-              Try Again
-            </button>
-          </div>
-        ) : (
-          <div className="card overflow-hidden p-0">
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b text-left text-xs font-medium text-muted-foreground">
-                    <th className="px-4 py-3 font-medium w-20">
-                      Image
-                    </th>
-                    <th className="px-4 py-3 font-medium">
-                      English Name
-                    </th>
-                    <th className="px-4 py-3 font-medium">
-                      Arabic Name
-                    </th>
-                    <th className="px-4 py-3 font-medium text-right">
-                      Actions
-                    </th>
+        <div className="card overflow-hidden p-0">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b text-left text-xs font-medium text-muted-foreground">
+                  <th className="px-4 py-3 font-medium w-20">
+                    Image
+                  </th>
+                  <th className="px-4 py-3 font-medium">
+                    English Name
+                  </th>
+                  <th className="px-4 py-3 font-medium">
+                    Arabic Name
+                  </th>
+                  <th className="px-4 py-3 font-medium text-right">
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {displayCategories.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={4}
+                      className="px-4 py-8 text-center text-muted-foreground"
+                    >
+                      No categories found. Add a category to get started.
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {categories?.length === 0 ? (
-                    <tr>
-                      <td
-                        colSpan={4}
-                        className="px-4 py-8 text-center text-muted-foreground"
-                      >
-                        No categories found. Add a category to get started.
-                      </td>
-                    </tr>
-                  ) : (
-                    categories?.map((category: DocumentData) => {
-                      // Safely extract values with null/undefined checks
-                      const typedCategory: Category = {
-                        id: category.id || '',
-                        name_en: category.name_en || '',
-                        name_ar: category.name_ar || '',
-                        imageUrl: category.imageUrl || '',
-                        created_at: category.created_at || null,
-                        updated_at: category.updated_at || null
-                      };
-                      
-                      return (
-                        <tr key={typedCategory.id} className="hover:bg-muted/50">
-                          <td className="px-4 py-3">
-                            {typedCategory.imageUrl ? (
-                              <div className="relative h-12 w-12 overflow-hidden rounded-md">
-                                <Image
-                                  src={typedCategory.imageUrl}
-                                  alt={typedCategory.name_en}
-                                  fill
-                                  className="object-cover"
-                                  sizes="48px"
-                                />
-                              </div>
-                            ) : (
-                              <div className="flex h-12 w-12 items-center justify-center rounded-md border bg-muted">
-                                <ImageIcon className="h-6 w-6 text-muted-foreground/50" />
-                              </div>
-                            )}
-                          </td>
-                          <td className="px-4 py-3">{typedCategory.name_en}</td>
-                          <td className="px-4 py-3 text-right" dir="rtl">
-                            {typedCategory.name_ar}
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <div className="flex justify-end gap-2">
-                              <button
-                                onClick={() => openEditModal(typedCategory)}
-                                className="btn-icon btn-sm"
-                              >
-                                <Edit className="h-3.5 w-3.5" />
-                                <span className="sr-only">Edit</span>
-                              </button>
-                              <button
-                                onClick={() => openDeleteModal(typedCategory)}
-                                className="btn-icon btn-sm text-destructive hover:bg-destructive/10"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                                <span className="sr-only">Delete</span>
-                              </button>
+                ) : (
+                  displayCategories.map((category: DisplayCategory) => {
+                    return (
+                      <tr key={category.id} className="hover:bg-muted/50">
+                        <td className="px-4 py-3">
+                          {category.icon_url ? (
+                            <div className="relative h-12 w-12 overflow-hidden rounded-md">
+                              <Image
+                                src={category.icon_url || '/placeholder-image.png'}
+                                alt={category.name_en || 'Category icon'}
+                                fill
+                                className="object-cover"
+                                sizes="48px"
+                              />
                             </div>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
+                          ) : (
+                            <div className="flex h-12 w-12 items-center justify-center rounded-md border bg-muted">
+                              <ImageIcon className="h-6 w-6 text-muted-foreground/50" />
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">{category.name_en}</td>
+                        <td className="px-4 py-3 text-right" dir="rtl">
+                          {category.name_ar}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <div className="flex justify-end gap-2">
+                            <button
+                              onClick={() => openEditModal(category)}
+                              className="btn-icon btn-sm"
+                            >
+                              <Edit className="h-3.5 w-3.5" />
+                              <span className="sr-only">Edit</span>
+                            </button>
+                            <button
+                              onClick={() => openDeleteModal(category)}
+                              className="btn-icon btn-sm text-destructive hover:bg-destructive/10"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              <span className="sr-only">Delete</span>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
           </div>
-        )}
+        </div>
       </div>
 
       {/* Add Category Modal */}
@@ -400,8 +528,10 @@ export default function CategoriesPage() {
               </div>
               
               <ImageUpload
-                onImageUploaded={setImageUrl}
-                storagePath="categories"
+                bucketName={CATEGORY_IMAGE_BUCKET}
+                storagePathPrefix="categories"
+                onImageUploaded={handleImageUpload}
+                existingImageUrl={imageUrl}
                 className="pt-2"
               />
               
@@ -465,8 +595,9 @@ export default function CategoriesPage() {
               </div>
               
               <ImageUpload
-                onImageUploaded={setImageUrl}
-                storagePath="categories"
+                bucketName={CATEGORY_IMAGE_BUCKET}
+                storagePathPrefix="categories"
+                onImageUploaded={handleImageUpload}
                 existingImageUrl={imageUrl}
                 className="pt-2"
               />

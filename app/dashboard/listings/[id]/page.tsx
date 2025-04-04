@@ -20,156 +20,313 @@ import {
   Clock,
   Tag,
   Info,
-  Eye
+  Eye,
+  Image as ImageIcon
 } from "lucide-react";
 import Shell from "@/components/layout/shell";
-import { useFirestoreDocument } from "@/hooks/use-firestore";
+import { useSupabaseRow, useSupabaseTable } from "@/hooks/use-supabase";
+import { useCategories, Category } from "@/hooks/use-categories";
+import { ListingMedia } from "@/hooks/use-listing-images";
 import Image from "next/image";
-import { auth } from "@/lib/firebase";
-import { onAuthStateChanged } from "firebase/auth";
-import { DocumentData, FirestoreError } from "firebase/firestore";
+import { useAuth } from "@/providers/auth-provider";
+
+interface Listing {
+  id: string;
+  location?: string | null;
+  google_maps_link?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  location_id?: string | null;
+  status?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+interface ListingTranslation {
+  id?: string;
+  listing_id: string;
+  language_code: string;
+  name?: string | null;
+  description?: string | null;
+  opening_hours?: string | null;
+}
+
+interface ListingCategoryLink {
+    id?: string; 
+    listing_id: string;
+    category_id: string;
+}
+
+interface DisplayListing extends Listing {
+    name_en?: string | null;
+    name_ar?: string | null;
+    description_en?: string | null;
+    description_ar?: string | null;
+    opening_hours_en?: string | null;
+    opening_hours_ar?: string | null;
+}
+
+interface DisplayCategory extends Category {
+    name_en?: string | null;
+    name_ar?: string | null;
+}
+
+const CATEGORY_IMAGE_BUCKET = 'category-icons'; // From categories page - reuse?
+const MEDIA_BUCKET_NAME = 'listing-media'; // From useListingMedia hook - reuse?
 
 export default function ViewListingPage() {
   const router = useRouter();
   const params = useParams();
-  // Ensure listingId is a string and never undefined
+  const { user, loading: authLoading, supabase } = useAuth();
   const listingId = params?.id ? (Array.isArray(params.id) ? params.id[0] : params.id) : "";
   
-  // If listingId is empty, redirect to listings page
   useEffect(() => {
     if (!listingId) {
+      console.error("No Listing ID found, redirecting...");
       router.push("/dashboard/listings");
     }
   }, [listingId, router]);
   
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [isAuthChecking, setIsAuthChecking] = useState(true);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [shouldRefresh, setShouldRefresh] = useState(false);
   
-  // Auth check
+  const [translationEn, setTranslationEn] = useState<ListingTranslation | null>(null);
+  const [translationAr, setTranslationAr] = useState<ListingTranslation | null>(null);
+  const [linkedCategories, setLinkedCategories] = useState<DisplayCategory[]>([]);
+  const [mediaItems, setMediaItems] = useState<ListingMedia[]>([]);
+
+  const { 
+    data: listing, 
+    status: listingStatus,
+    error: listingError,
+    refresh: refreshListing,
+    remove: removeListingRow 
+  } = useSupabaseRow('listings', listingId);
+
+  const { 
+    data: allTranslations, 
+    status: translationsStatus,
+    error: translationsError,
+    refresh: refreshTranslations 
+  } = useSupabaseTable('listing_translations');
+  
+  const { 
+    data: allCategoryLinks,
+    status: linksStatus,
+    error: linksError,
+    refresh: refreshLinks
+  } = useSupabaseTable('listing_categories');
+  
+  const { 
+      categories: allCategories, 
+      loading: categoriesLoading, 
+      error: categoriesError 
+  } = useCategories();
+
+  const { 
+      data: allCategoryTranslations, 
+      status: categoryTranslationsStatus,
+      error: categoryTranslationsError,
+      refresh: refreshCategoryTranslations
+  } = useSupabaseTable('category_translations');
+
+  const { 
+      data: allMedia, 
+      status: mediaStatus, 
+      error: mediaError, 
+      refresh: refreshMedia 
+  } = useSupabaseTable('media');
+
+  const loading = authLoading || 
+                  listingStatus !== 'success' || 
+                  translationsStatus !== 'success' || 
+                  linksStatus !== 'success' || 
+                  categoriesLoading || 
+                  categoryTranslationsStatus !== 'success' ||
+                  mediaStatus !== 'success';
+                  
+  const combinedError = listingError || 
+                        translationsError || 
+                        linksError || 
+                        categoriesError || 
+                        categoryTranslationsError ||
+                        mediaError;
+
   useEffect(() => {
-    if (!auth) {
-      console.error("Auth is not initialized");
-      setIsAuthChecking(false);
+    if (allTranslations && listingId) {
+      const en = allTranslations.find(t => t.listing_id === listingId && t.language_code === 'en');
+      const ar = allTranslations.find(t => t.listing_id === listingId && t.language_code === 'ar');
+      setTranslationEn(en as ListingTranslation || null);
+      setTranslationAr(ar as ListingTranslation || null);
+    }
+  }, [allTranslations, listingId]);
+
+  useEffect(() => {
+    if (allCategoryLinks && allCategories && allCategoryTranslations && listingId) {
+        const links = allCategoryLinks.filter(link => link.listing_id === listingId);
+        const categoryIds = links.map(link => link.category_id);
+        const resolvedBaseCategories = allCategories.filter(cat => categoryIds.includes(cat.id));
+        
+        const combinedDisplayCategories = resolvedBaseCategories.map(baseCat => {
+             const en = allCategoryTranslations.find(t => t.category_id === baseCat.id && t.language_code === 'en');
+             const ar = allCategoryTranslations.find(t => t.category_id === baseCat.id && t.language_code === 'ar');
+             return {
+                 ...baseCat,
+                 name_en: en?.name,
+                 name_ar: ar?.name,
+                 // Add other translation fields if needed (like icon_url, description)
+             } as DisplayCategory;
+        });
+        
+        setLinkedCategories(combinedDisplayCategories);
+    }
+  }, [allCategoryLinks, allCategories, allCategoryTranslations, listingId]);
+  
+  useEffect(() => {
+      if (allMedia && listingId) {
+          const items = allMedia.filter(item => item.listing_id === listingId);
+          items.sort((a, b) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0) || (a.order_index ?? 999) - (b.order_index ?? 999));
+          setMediaItems(items as ListingMedia[]);
+      }
+  }, [allMedia, listingId]);
+
+  const refreshAll = () => {
+      refreshListing();
+      refreshTranslations();
+      refreshLinks();
+      refreshCategoryTranslations();
+      refreshMedia();
+  };
+
+  useEffect(() => {
+    if (!authLoading && !user) {
       router.push("/auth/login");
-      return () => {};
     }
+  }, [authLoading, user, router]);
 
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setIsAuthChecking(false);
-      if (user) {
-        setIsAuthenticated(true);
-      } else {
-        console.log("No authenticated user, redirecting to login");
-        router.push("/auth/login");
-      }
-    });
-    
-    return () => unsubscribe();
-  }, [router]);
-
-  // Add logging to track component lifecycle and data loading
-  useEffect(() => {
-    console.log("ViewListingPage mounted, listingId:", listingId);
-    return () => {
-      console.log("ViewListingPage unmounted");
-    };
-  }, [listingId]);
-
-  // Fetch the listing data
-  const {
-    data: listing,
-    status,
-    error,
-    refresh,
-    remove,
-  } = useFirestoreDocument('listings', listingId, {
-    onSuccess: (data: DocumentData | null) => {
-      console.log("Firestore data loaded successfully:", data ? "data exists" : "no data");
-    },
-    onError: (error: FirestoreError) => {
-      console.error("Firestore error:", error);
-      setErrorMessage(`Error loading listing: ${error.message}`);
-      
-      // If the error is authentication related, redirect to login
-      if (error.code === 'permission-denied' || error.code === 'unauthenticated') {
-        router.push("/auth/login");
-      }
-    }
-  });
-
-  // Refresh listing when the shouldRefresh state changes
-  useEffect(() => {
-    if (shouldRefresh) {
-      refresh();
-      setShouldRefresh(false);
-    }
-  }, [shouldRefresh, refresh]);
-
-  const loading = status === 'loading' || status === 'idle' || isAuthChecking;
-
-  // Handle deleting the listing
   const handleDelete = async () => {
+    if (!supabase || !listingId || !removeListingRow) {
+        setErrorMessage("Cannot delete: Missing client, ID, or delete function.");
+        return;
+    }
+    setShowDeleteConfirm(false); // Close modal immediately
+    setErrorMessage(null);
+    // Indicate loading/deleting state if desired
+
     try {
-      await remove();
-      router.push("/dashboard/listings");
+        // --- Delete Related Data --- 
+
+        // 1. Delete Category Links
+        const { error: deleteLinksError } = await supabase
+            .from('listing_categories')
+            .delete()
+            .eq('listing_id', listingId);
+        if (deleteLinksError) console.warn("Error deleting category links:", deleteLinksError); // Log but continue
+        
+        // 2. Delete Translations
+        const { error: deleteTransError } = await supabase
+            .from('listing_translations')
+            .delete()
+            .eq('listing_id', listingId);
+         if (deleteTransError) console.warn("Error deleting translations:", deleteTransError); // Log but continue
+
+        // 3. Delete Media (Storage and DB)
+        if (mediaItems && mediaItems.length > 0) {
+            // 3a. Delete files from Storage
+            const filesToRemove = mediaItems.map(item => {
+                 try {
+                    const url = new URL(item.url);
+                    const path = url.pathname.split(`/${MEDIA_BUCKET_NAME}/`)[1];
+                    return path;
+                 } catch (e) {
+                     console.warn("Could not parse URL for storage deletion:", item.url, e);
+                     return null;
+                 }
+            }).filter(path => path != null) as string[];
+
+            if (filesToRemove.length > 0) {
+                const { error: storageError } = await supabase.storage
+                    .from(MEDIA_BUCKET_NAME)
+                    .remove(filesToRemove);
+                 if (storageError) console.warn("Error deleting files from storage:", storageError); // Log but continue
+            }
+
+            // 3b. Delete media records from DB
+            const { error: deleteMediaDbError } = await supabase
+                .from('media')
+                .delete()
+                .eq('listing_id', listingId);
+            if (deleteMediaDbError) console.warn("Error deleting media records:", deleteMediaDbError); // Log but continue
+        }
+        
+        // 4. Delete Favorites (if applicable)
+        // const { error: deleteFavError } = await supabase
+        //     .from('favorites')
+        //     .delete()
+        //     .eq('listing_id', listingId);
+        // if (deleteFavError) console.warn("Error deleting favorites:", deleteFavError);
+
+        // --- Delete Main Listing --- 
+        await removeListingRow(); 
+
+        console.log("Listing and related data deleted successfully");
+        router.push("/dashboard/listings"); // Redirect after successful deletion
+
     } catch (error: any) {
-      console.error("Error deleting listing:", error);
-      setErrorMessage(`Failed to delete: ${error.message}`);
+      console.error("Error during full listing deletion process:", error);
+      // Use the error from the removeListingRow call if possible, or a generic message
+      setErrorMessage(`Failed to delete listing: ${error?.message || 'Unknown error'}`);
+      // Consider adding a manual refresh button here if redirect fails
+    } finally {
+         // Reset loading/deleting state if using one
     }
   };
   
-  // Show loading state
-  if (loading) {
-    return (
-      <Shell>
-        <div className="flex items-center justify-center h-96">
-          <div className="text-center">
-            <Loader2 className="h-10 w-10 animate-spin mx-auto text-primary" />
-            <p className="mt-4 text-lg">Loading listing data...</p>
-          </div>
-        </div>
-      </Shell>
-    );
-  }
-  
-  // Show error state
-  if (status === 'error' && !errorMessage) {
-    return (
-      <Shell>
-        <div className="flex items-center justify-center h-96">
-          <div className="text-center max-w-md">
-            <AlertCircle className="h-10 w-10 mx-auto text-destructive" />
-            <h2 className="text-xl font-bold mt-4">Error Loading Listing</h2>
-            <p className="mt-2 text-muted-foreground">
-              {error?.message || "An unknown error occurred."}
-            </p>
-            <button
-              onClick={() => setShouldRefresh(true)}
-              className="btn btn-primary mt-6"
-            >
-              Try Again
-            </button>
-          </div>
-        </div>
-      </Shell>
-    );
-  }
-  
-  // Format the timestamp
-  const formatDate = (timestamp: any) => {
-    if (!timestamp || !timestamp.toDate) {
+  const formatDate = (isoString: string | null | undefined) => {
+    if (!isoString) {
       return "N/A";
     }
-    const date = timestamp.toDate();
-    return date.toLocaleDateString('en-US', { 
-      year: 'numeric', 
-      month: 'short', 
-      day: 'numeric' 
-    });
+    try {
+      const date = new Date(isoString);
+      // Optional: Check if the date is valid
+      if (isNaN(date.getTime())) {
+        return "Invalid Date";
+      }
+      // Format the date as needed, e.g., LocaleString
+      return date.toLocaleString(undefined, { 
+          year: 'numeric', 
+          month: 'short', 
+          day: 'numeric', 
+          hour: '2-digit', 
+          minute: '2-digit' 
+      });
+    } catch (error) {
+      console.error("Error formatting date:", error);
+      return "Error";
+    }
   };
+
+  if (!loading && !combinedError && !listing) {
+       return (
+         <Shell>
+           <div className="text-center py-10"><AlertCircle className="mx-auto h-10 w-10 text-muted-foreground" /><p className="mt-4 text-muted-foreground">Listing not found.</p><Link href="/dashboard/listings" className="btn btn-primary mt-4">Back to Listings</Link></div>
+         </Shell>
+       );
+   }
+
+  let displayListing: DisplayListing | null = null;
+  if (listing) {
+      const baseListingData = listing as Listing;
+      displayListing = { 
+          ...baseListingData,
+          name_en: translationEn?.name,
+          name_ar: translationAr?.name,
+          description_en: translationEn?.description,
+          description_ar: translationAr?.description,
+          opening_hours_en: translationEn?.opening_hours,
+          opening_hours_ar: translationAr?.opening_hours,
+      };
+  }
 
   return (
     <Shell>
@@ -189,7 +346,7 @@ export default function ViewListingPage() {
           <div className="flex items-center gap-2">
             <button
               className="btn btn-outline btn-sm"
-              onClick={() => setShouldRefresh(true)}
+              onClick={() => refreshAll()}
               disabled={loading}
             >
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
@@ -212,7 +369,6 @@ export default function ViewListingPage() {
           </div>
         </div>
 
-        {/* Error message display */}
         {errorMessage && (
           <div className="bg-destructive/10 text-destructive p-4 rounded-lg flex items-center gap-2">
             <AlertCircle className="h-5 w-5" />
@@ -226,160 +382,111 @@ export default function ViewListingPage() {
           </div>
         )}
 
-        {/* Listing content */}
-        {status === 'success' && listing && !loading && (
+        {displayListing && (
           <div className="space-y-6">
-            {/* Main info card */}
             <div className="card">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {/* Image */}
                 <div className="col-span-1">
                   <div className="aspect-video overflow-hidden rounded-lg relative bg-muted">
-                    {listing.image_url || listing.thumbnail ? (
+                    {mediaItems.length > 0 ? (
                       <Image 
-                        src={listing.image_url || listing.thumbnail} 
-                        alt={listing.title || listing.name_en}
+                        src={mediaItems[0].url} 
+                        alt={displayListing.name_en || 'Listing image'}
                         fill 
                         className="object-cover" 
                         sizes="(max-width: 768px) 100vw, 33vw"
                       />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center bg-muted">
-                        <Info className="h-8 w-8 text-muted-foreground" />
+                        <ImageIcon className="h-10 w-10 text-muted-foreground" />
                       </div>
                     )}
                   </div>
                 </div>
                 
-                {/* Main details */}
                 <div className="col-span-1 md:col-span-2">
                   <h2 className="text-2xl font-bold mb-2">
-                    {listing.title || listing.name_en}
+                    {displayListing.name_en || '(No English Name)'}
                   </h2>
+                  <p className="text-lg text-muted-foreground mb-4 text-right" dir="rtl">
+                    {displayListing.name_ar || '(No Arabic Name)'}
+                  </p>
                   
                   <div className="flex flex-wrap gap-2 mb-4">
-                    <span className="badge badge-primary">
-                      {listing.category}
-                    </span>
-                    <span className={`badge ${listing.status === 'Published' ? 'badge-success' : 'badge-warning'}`}>
-                      {listing.status}
-                    </span>
-                    {listing.featured && (
-                      <span className="badge badge-secondary">
-                        Featured
+                    {linkedCategories.map((category) => (
+                      <span key={category.id} className="badge badge-primary">
+                        {category.name_en ?? category.id}
                       </span>
-                    )}
+                    ))}
+                    <span className={`badge ${displayListing.status === 'Published' ? 'badge-success' : 'badge-warning'}`}>
+                      {displayListing.status}
+                    </span>
                   </div>
                   
                   <div className="prose max-w-none mb-4">
-                    <p>{listing.description_en}</p>
+                    <p>{displayListing.description_en || '(No English description)'}</p>
                   </div>
                   
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="prose max-w-none mb-4">
+                    <p>{displayListing.description_ar || '(No Arabic description)'}</p>
+                  </div>
+                  
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
                     <div className="flex items-center gap-2">
                       <MapPin className="h-4 w-4 text-muted-foreground" />
-                      <span>{listing.location || "Location not specified"}</span>
-                    </div>
-                    
-                    {listing.phone && (
-                      <div className="flex items-center gap-2">
-                        <Phone className="h-4 w-4 text-muted-foreground" />
-                        <span>{listing.phone}</span>
-                      </div>
-                    )}
-                    
-                    {listing.website && (
-                      <div className="flex items-center gap-2">
-                        <Globe className="h-4 w-4 text-muted-foreground" />
-                        <a href={listing.website} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
-                          Website
-                        </a>
-                      </div>
-                    )}
-                    
-                    {(listing.hours || listing.opening_hours) && (
-                      <div className="flex items-center gap-2">
-                        <Clock className="h-4 w-4 text-muted-foreground" />
-                        <span>{listing.hours || listing.opening_hours}</span>
-                      </div>
-                    )}
-                    
-                    <div className="flex items-center gap-2">
-                      <Tag className="h-4 w-4 text-muted-foreground" />
-                      <span>
-                        {listing.price_range || listing.price || "Price not specified"}
-                      </span>
-                    </div>
-                    
-                    <div className="flex items-center gap-2">
-                      <Eye className="h-4 w-4 text-muted-foreground" />
-                      <span>{(listing.views || 0).toLocaleString()} views</span>
+                      <span>{displayListing.location || "Location not specified"}</span>
                     </div>
                   </div>
                 </div>
               </div>
             </div>
             
-            {/* Metadata card */}
             <div className="card">
-              <h3 className="text-lg font-semibold mb-4">Listing Metadata</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                <div>
-                  <p className="text-sm text-muted-foreground">Created</p>
-                  <p className="font-medium">{formatDate(listing.created_at)}</p>
+              <h3 className="text-lg font-semibold mb-4">Details</h3>
+              <dl className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                <div className="flex">
+                  <dt className="w-24 font-medium text-muted-foreground">
+                    <MapPin className="inline-block h-4 w-4 mr-1" /> Location
+                  </dt>
+                  <dd>{displayListing.location || '-'}</dd>
                 </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Last Updated</p>
-                  <p className="font-medium">{formatDate(listing.updated_at)}</p>
+                <div className="flex">
+                  <dt className="w-24 font-medium text-muted-foreground">
+                    <Globe className="inline-block h-4 w-4 mr-1" /> Map Link
+                  </dt>
+                  <dd>{displayListing.google_maps_link ? <a href={displayListing.google_maps_link} target="_blank" rel="noopener noreferrer" className="link">View on Map</a> : '-'}</dd>
                 </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">ID</p>
-                  <p className="font-medium font-mono text-xs">{listingId}</p>
+                <div className="flex">
+                  <dt className="w-24 font-medium text-muted-foreground">
+                    <Clock className="inline-block h-4 w-4 mr-1" /> Hours (EN)
+                  </dt>
+                  <dd>{displayListing.opening_hours_en || '-'}</dd>
                 </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Status</p>
-                  <div className="flex items-center gap-1 mt-1">
-                    {listing.status === "Published" ? (
-                      <>
-                        <Check className="h-4 w-4 text-green-500" />
-                        <span className="font-medium text-green-500">Published</span>
-                      </>
-                    ) : (
-                      <>
-                        <X className="h-4 w-4 text-amber-500" />
-                        <span className="font-medium text-amber-500">Draft</span>
-                      </>
-                    )}
-                  </div>
+                <div className="flex">
+                  <dt className="w-24 font-medium text-muted-foreground">
+                    <Clock className="inline-block h-4 w-4 mr-1" /> Hours (AR)
+                  </dt>
+                  <dd>{displayListing.opening_hours_ar || '-'}</dd>
                 </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Featured</p>
-                  <div className="flex items-center gap-1 mt-1">
-                    {listing.featured ? (
-                      <>
-                        <Check className="h-4 w-4 text-green-500" />
-                        <span className="font-medium text-green-500">Yes</span>
-                      </>
-                    ) : (
-                      <>
-                        <X className="h-4 w-4 text-muted-foreground" />
-                        <span className="font-medium">No</span>
-                      </>
-                    )}
-                  </div>
+                <div className="flex">
+                  <dt className="w-24 font-medium text-muted-foreground">Created</dt>
+                  <dd>{formatDate(displayListing.created_at)}</dd>
                 </div>
-              </div>
+                <div className="flex">
+                  <dt className="w-24 font-medium text-muted-foreground">Updated</dt>
+                  <dd>{formatDate(displayListing.updated_at)}</dd>
+                </div>
+              </dl>
             </div>
             
-            {/* Additional Images, if any */}
-            {listing.images && listing.images.length > 0 && (
+            {mediaItems.length > 0 && (
               <div className="card">
                 <h3 className="text-lg font-semibold mb-4">Gallery</h3>
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                  {listing.images.map((image: string, index: number) => (
+                  {mediaItems.map((item, index) => (
                     <div key={index} className="aspect-video relative rounded-lg overflow-hidden bg-muted">
                       <Image 
-                        src={image} 
+                        src={item.url} 
                         alt={`Image ${index + 1}`}
                         fill 
                         className="object-cover" 
@@ -394,7 +501,6 @@ export default function ViewListingPage() {
         )}
       </div>
       
-      {/* Delete confirmation modal */}
       {showDeleteConfirm && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-card max-w-md w-full p-6 rounded-lg shadow-lg">

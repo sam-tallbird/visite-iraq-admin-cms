@@ -3,10 +3,12 @@ const nextConfig = {
   reactStrictMode: true,
   swcMinify: true,
   images: {
-    domains: ['firebasestorage.googleapis.com'],
+    domains: [
+      'firebasestorage.googleapis.com',
+      'lbgqkqpiigfknfisaqfo.supabase.co'
+    ],
   },
-  output: 'standalone',
-  distDir: '.next'
+  // distDir: 'public'
 }
 
-module.exports = nextConfig 
+module.exports = nextConfig

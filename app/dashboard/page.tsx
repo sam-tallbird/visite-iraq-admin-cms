@@ -2,21 +2,14 @@
 
 import Shell from "@/components/layout/shell";
 import { useEffect, useState } from "react";
-import { db } from "@/lib/firebase";
-import { collection, getDocs, Firestore } from "firebase/firestore";
 import { 
-  Building2, 
-  Landmark, 
-  TreePine, 
-  Utensils, 
-  ShoppingBag, 
   Users, 
   MapPin,
   PieChart,
   History,
-  Church
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useSupabaseTable } from "@/hooks/use-supabase";
 
 interface StatCardProps {
   title: string;
@@ -125,93 +118,25 @@ const StatsChart = ({ loading }: StatsChartProps) => (
 export default function DashboardPage() {
   const [stats, setStats] = useState({
     totalListings: 0,
-    restaurants: 0,
-    historicalSites: 0,
-    parks: 0,
-    museums: 0,
-    shopping: 0,
-    religiousSites: 0,
     users: 0,
   });
-  const [statChanges, setStatChanges] = useState<{[key: string]: {value: number, type: "increase" | "decrease"}}>({});
-  const [loading, setLoading] = useState(true);
-  const [mounted, setMounted] = useState(false);
 
-  // Generate random percent changes only once after mounting on client
-  useEffect(() => {
-    setMounted(true);
-    
-    // Generate random stats only on client side to avoid hydration mismatch
-    const changes = {
-      totalListings: { value: Math.floor(Math.random() * 20) + 1, type: Math.random() > 0.5 ? "increase" as const : "decrease" as const },
-      restaurants: { value: Math.floor(Math.random() * 20) + 1, type: Math.random() > 0.5 ? "increase" as const : "decrease" as const },
-      historicalSites: { value: Math.floor(Math.random() * 20) + 1, type: Math.random() > 0.5 ? "increase" as const : "decrease" as const },
-      parks: { value: Math.floor(Math.random() * 20) + 1, type: Math.random() > 0.5 ? "increase" as const : "decrease" as const },
-      museums: { value: Math.floor(Math.random() * 20) + 1, type: Math.random() > 0.5 ? "increase" as const : "decrease" as const },
-      shopping: { value: Math.floor(Math.random() * 20) + 1, type: Math.random() > 0.5 ? "increase" as const : "decrease" as const },
-      religiousSites: { value: Math.floor(Math.random() * 20) + 1, type: Math.random() > 0.5 ? "increase" as const : "decrease" as const },
-      users: { value: Math.floor(Math.random() * 20) + 1, type: Math.random() > 0.5 ? "increase" as const : "decrease" as const },
-    };
-    
-    setStatChanges(changes);
-  }, []);
+  const { data: listingsData, status: listingsStatus } = useSupabaseTable('listings');
+  const { data: profilesData, status: profilesStatus } = useSupabaseTable('profiles');
+
+  const loading = listingsStatus === 'loading' || listingsStatus === 'idle' || profilesStatus === 'loading' || profilesStatus === 'idle';
 
   useEffect(() => {
-    const fetchStats = async () => {
-      try {
-        if (!db) {
-          console.error("Firestore is not initialized");
-          setLoading(false);
-          return;
-        }
-
-        // Fetch collections count from Firestore
-        const listingsSnapshot = await getDocs(collection(db as Firestore, "listings"));
-        const totalListings = listingsSnapshot.size;
-        
-        // Count by category
-        let restaurantCount = 0;
-        let historicalCount = 0;
-        let parksCount = 0;
-        let museumsCount = 0;
-        let shoppingCount = 0;
-        let religiousCount = 0;
-        
-        listingsSnapshot.forEach((doc) => {
-          const data = doc.data();
-          const category = data.category;
-          
-          if (category === "restaurants") restaurantCount++;
-          else if (category === "historical_sites") historicalCount++;
-          else if (category === "parks_nature") parksCount++;
-          else if (category === "museums") museumsCount++;
-          else if (category === "shopping") shoppingCount++;
-          else if (category === "religious_sites") religiousCount++;
-        });
-        
-        // Get users count
-        const usersSnapshot = await getDocs(collection(db as Firestore, "users"));
-        const usersCount = usersSnapshot.size;
-        
-        setStats({
-          totalListings,
-          restaurants: restaurantCount,
-          historicalSites: historicalCount,
-          parks: parksCount,
-          museums: museumsCount,
-          shopping: shoppingCount,
-          religiousSites: religiousCount,
-          users: usersCount,
-        });
-      } catch (error) {
-        console.error("Error fetching stats:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchStats();
-  }, []);
+    if (listingsStatus === 'success' && profilesStatus === 'success') {
+      const totalListings = listingsData?.length || 0;
+      const usersCount = profilesData?.length || 0;
+      
+      setStats({
+        totalListings,
+        users: usersCount,
+      });
+    }
+  }, [listingsStatus, profilesStatus, listingsData, profilesData]);
 
   const statCards = [
     {
@@ -219,56 +144,12 @@ export default function DashboardPage() {
       value: stats.totalListings,
       icon: <MapPin size={24} />,
       description: "All tourism locations",
-      change: mounted ? statChanges.totalListings : undefined
     },
     {
-      title: "Restaurants",
-      value: stats.restaurants,
-      icon: <Utensils size={24} />,
-      description: "Food & dining listings",
-      change: mounted ? statChanges.restaurants : undefined
-    },
-    {
-      title: "Historical Sites",
-      value: stats.historicalSites,
-      icon: <Landmark size={24} />,
-      description: "Historical locations",
-      change: mounted ? statChanges.historicalSites : undefined
-    },
-    {
-      title: "Parks & Nature",
-      value: stats.parks,
-      icon: <TreePine size={24} />,
-      description: "Natural attractions",
-      change: mounted ? statChanges.parks : undefined
-    },
-    {
-      title: "Museums",
-      value: stats.museums,
-      icon: <Building2 size={24} />,
-      description: "Museums & galleries",
-      change: mounted ? statChanges.museums : undefined
-    },
-    {
-      title: "Shopping",
-      value: stats.shopping,
-      icon: <ShoppingBag size={24} />,
-      description: "Shopping locations",
-      change: mounted ? statChanges.shopping : undefined
-    },
-    {
-      title: "Religious Sites",
-      value: stats.religiousSites,
-      icon: <Church size={24} />,
-      description: "Religious locations",
-      change: mounted ? statChanges.religiousSites : undefined
-    },
-    {
-      title: "Users",
+      title: "Registered Users",
       value: stats.users,
       icon: <Users size={24} />,
-      description: "Registered app users",
-      change: mounted ? statChanges.users : undefined
+      description: "Total registered users",
     },
   ];
 
@@ -291,7 +172,6 @@ export default function DashboardPage() {
               icon={card.icon}
               description={card.description}
               loading={loading}
-              change={card.change}
             />
           ))}
         </div>
@@ -314,7 +194,6 @@ export default function DashboardPage() {
               icon={card.icon}
               description={card.description}
               loading={loading}
-              change={card.change}
             />
           ))}
         </div>

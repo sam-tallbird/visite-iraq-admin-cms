@@ -19,93 +19,49 @@ import {
   RefreshCw
 } from "lucide-react";
 import Shell from "@/components/layout/shell";
-import { useFirestoreCollection } from "@/hooks/use-firestore";
-import { where, orderBy, limit, query, Timestamp } from "firebase/firestore";
-import { auth } from "@/lib/firebase";
-import { onAuthStateChanged } from "firebase/auth";
+import { useSupabaseTable } from "@/hooks/use-supabase";
+import { useAuth } from "@/providers/auth-provider";
 
-// Define the Listing type
+// Define the Listing type based on Supabase 'listings' table
+// TODO: Add translation fields later
 interface Listing {
   id: string;
-  title: string;
-  name_en: string;
-  description_en: string;
-  category: string;
-  status: "Published" | "Draft";
-  featured: boolean;
-  views: number;
-  updated_at: Timestamp;
-  created_at: Timestamp;
-  thumbnail?: string;
-  image_url?: string;
+  location?: string | null;
+  status?: "Published" | "Draft" | "Archived";
+  created_at?: string | null; // ISO string
+  updated_at?: string | null; // ISO string
+  // Add other relevant fields from 'listings' table if needed for display
+  // e.g., thumbnail_url if you create one
 }
+
+// Define type for sorting fields present in the basic Listing interface
+type SortableListingField = 'status' | 'created_at' | 'updated_at' | 'location';
 
 export default function ListingsPage() {
   const router = useRouter();
+  const { user, loading: authLoading } = useAuth();
   const [searchTerm, setSearchTerm] = useState("");
-  const [sortField, setSortField] = useState("updated_at");
+  const [sortField, setSortField] = useState<SortableListingField>("updated_at");
   const [sortDirection, setSortDirection] = useState("desc");
-  const [selectedCategory, setSelectedCategory] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<{show: boolean, id: string | null}>({show: false, id: null});
-  const [isAuthChecking, setIsAuthChecking] = useState(true);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [shouldRefresh, setShouldRefresh] = useState(false);
 
-  // Check authentication state
-  useEffect(() => {
-    if (!auth) {
-      console.error("Auth is not initialized");
-      setIsAuthChecking(false);
-      router.push("/auth/login");
-      return () => {};
-    }
-
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setIsAuthChecking(false);
-      if (user) {
-        setIsAuthenticated(true);
-      } else {
-        console.log("No authenticated user, redirecting to login");
-        router.push("/auth/login");
-      }
-    });
-    
-    return () => unsubscribe();
-  }, [router]);
-
-  // Use the Firestore hook to fetch listings
+  // Use the Supabase hook to fetch listings
+  // TODO: Add server-side filtering/sorting/pagination later
   const { 
-    data: listings, 
+    data: listings,
     status, 
     error, 
     refresh, 
-    remove
-  } = useFirestoreCollection('listings', [orderBy("updated_at", "desc")], {
-    onError: (error) => {
-      console.error("Firestore error:", error);
-      setErrorMessage(`Error loading listings: ${error.message}`);
-      
-      // If the error is authentication related, redirect to login
-      if (error.code === 'permission-denied' || error.code === 'unauthenticated') {
-        router.push("/auth/login");
-      }
-    }
-  });
+    remove: removeListing
+  } = useSupabaseTable('listings');
 
-  // Refresh listings when the shouldRefresh state changes
-  useEffect(() => {
-    if (shouldRefresh) {
-      refresh();
-      setShouldRefresh(false);
-    }
-  }, [shouldRefresh, refresh]);
-
-  const loading = status === 'loading' || status === 'idle' || isAuthChecking;
+  // Combined loading state
+  const loading = status === 'loading' || status === 'idle' || authLoading;
 
   // Handle sorting
-  const handleSort = (field: string) => {
+  const handleSort = (field: SortableListingField) => {
     if (sortField === field) {
       setSortDirection(sortDirection === "asc" ? "desc" : "asc");
     } else {
@@ -135,68 +91,89 @@ export default function ListingsPage() {
   };
 
   const handleDelete = async (id: string) => {
+    if (!removeListing) {
+      alert("Delete function not ready.");
+      return;
+    }
     try {
-      await remove(id);
+      // TODO: Add deletion of related translations, categories, media
+      await removeListing(id);
       setShowDeleteConfirm({show: false, id: null});
-      // Refresh not needed since the hook will update automatically
-    } catch (error) {
+      // refresh(); // Refresh is implicitly handled by the hook after remove
+    } catch (error: any) {
       console.error("Error deleting listing:", error);
-      alert("Failed to delete listing. Please try again.");
+      alert(`Failed to delete listing: ${error.message}`);
     }
   };
 
-  // Format date for display
-  const formatDate = (timestamp: Timestamp) => {
-    if (!timestamp || !timestamp.toDate) {
+  // Format date for display (works with ISO strings)
+  const formatDate = (dateString: string | null | undefined) => {
+    if (!dateString) {
       return "N/A";
     }
-    const date = timestamp.toDate();
-    return date.toLocaleDateString('en-US', { 
-      year: 'numeric', 
-      month: 'short', 
-      day: 'numeric' 
-    });
+    try {
+      const date = new Date(dateString);
+      return date.toLocaleDateString('en-US', { 
+        year: 'numeric', 
+        month: 'short', 
+        day: 'numeric' 
+      });
+    } catch (e) {
+      console.error("Error formatting date string:", dateString, e);
+      return "Invalid Date";
+    }
   };
 
-  // Filter listings based on search and filters
-  const filteredListings = listings.filter((listing: any) => {
-    const title = listing.title || listing.name_en || "";
-    const matchesSearch = title.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesCategory = selectedCategory === "All" || listing.category === selectedCategory;
-    const matchesStatus = statusFilter === "All" || listing.status === statusFilter;
-    return matchesSearch && matchesCategory && matchesStatus;
+  // Client-side filtering (Simplified)
+  let filteredListings: Listing[] = [];
+  if (listings != null) {
+      filteredListings = (listings as Listing[]).filter((listing) => {
+          if (!listing) return false;
+          const location = listing.location || "";
+          const matchesSearch = location.toLowerCase().includes(searchTerm.toLowerCase());
+          const matchesStatus = statusFilter === "All" || listing.status === statusFilter;
+          return matchesSearch && matchesStatus;
+      });
+  }
+  
+  // Client-side sorting (Simplified)
+  const sortedListings = [...filteredListings].sort((a, b) => {
+    const fieldA = a[sortField];
+    const fieldB = b[sortField];
+    
+    // Handle null/undefined comparisons
+    if (fieldA == null && fieldB == null) return 0;
+    if (fieldA == null) return sortDirection === "asc" ? -1 : 1;
+    if (fieldB == null) return sortDirection === "asc" ? 1 : -1;
+    
+    // Sort strings (status, potentially location later)
+    if (typeof fieldA === "string" && typeof fieldB === "string") {
+      // Handle date strings separately for correct sorting
+      if (sortField === 'created_at' || sortField === 'updated_at') {
+        try {
+          const dateA = new Date(fieldA).getTime();
+          const dateB = new Date(fieldB).getTime();
+          return sortDirection === "asc" ? dateA - dateB : dateB - dateA;
+        } catch (e) {
+          // Fallback to string compare if date parsing fails
+          return sortDirection === "asc" ? fieldA.localeCompare(fieldB) : fieldB.localeCompare(fieldA);
+        }
+      } else {
+        // Standard string compare for other fields (like status)
+        return sortDirection === "asc" ? fieldA.localeCompare(fieldB) : fieldB.localeCompare(fieldA);
+      }
+    }
+    
+    // Default case (shouldn't hit often with current fields)
+    return 0; 
   });
 
-  // Sort listings
-  const sortedListings = [...filteredListings].sort((a: any, b: any) => {
-    const fieldA = a[sortField as keyof typeof a];
-    const fieldB = b[sortField as keyof typeof b];
-    
-    if (typeof fieldA === "string" && typeof fieldB === "string") {
-      return sortDirection === "asc" 
-        ? fieldA.localeCompare(fieldB) 
-        : fieldB.localeCompare(fieldA);
+  // Redirect if not authenticated
+  useEffect(() => {
+    if (!authLoading && !user) {
+      router.push("/auth/login");
     }
-    
-    if (typeof fieldA === "number" && typeof fieldB === "number") {
-      return sortDirection === "asc" ? fieldA - fieldB : fieldB - fieldA;
-    }
-    
-    // Handle timestamps
-    if (fieldA && fieldB && fieldA.toDate && fieldB.toDate) {
-      const dateA = fieldA.toDate();
-      const dateB = fieldB.toDate();
-      
-      return sortDirection === "asc" 
-        ? dateA.getTime() - dateB.getTime() 
-        : dateB.getTime() - dateA.getTime();
-    }
-    
-    // Default case (as strings)
-    return sortDirection === "asc" 
-      ? String(fieldA).localeCompare(String(fieldB))
-      : String(fieldB).localeCompare(String(fieldA));
-  });
+  }, [authLoading, user, router]);
 
   return (
     <Shell>
@@ -211,7 +188,7 @@ export default function ListingsPage() {
           <div className="flex items-center gap-2">
             <button
               className="btn btn-outline btn-sm inline-flex items-center gap-1"
-              onClick={() => setShouldRefresh(true)}
+              onClick={() => refresh()}
               disabled={loading}
             >
               {loading ? (
@@ -261,7 +238,7 @@ export default function ListingsPage() {
                   <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                   <input
                     type="search"
-                    placeholder="Search listings..."
+                    placeholder="Search by location..."
                     className="input-search w-full py-2 pl-8"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
@@ -269,27 +246,14 @@ export default function ListingsPage() {
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <select
-                    className="input-select min-w-32"
-                    value={selectedCategory}
-                    onChange={(e) => setSelectedCategory(e.target.value)}
-                  >
-                    <option value="All">All Categories</option>
-                    <option value="museums">Museums</option>
-                    <option value="historical_sites">Historical Sites</option>
-                    <option value="parks_nature">Parks & Nature</option>
-                    <option value="religious_sites">Religious Sites</option>
-                    <option value="shopping">Shopping</option>
-                    <option value="restaurants">Restaurants</option>
-                    <option value="experiences">Experiences</option>
-                  </select>
-                  <select
                     className="input-select min-w-28"
                     value={statusFilter}
                     onChange={(e) => setStatusFilter(e.target.value)}
                   >
-                    <option value="All">All Status</option>
+                    <option value="All">All Statuses</option>
                     <option value="Published">Published</option>
                     <option value="Draft">Draft</option>
+                    <option value="Archived">Archived</option>
                   </select>
                   <button className="btn btn-outline inline-flex items-center gap-1 py-2">
                     <Sliders className="h-4 w-4" />
@@ -324,7 +288,7 @@ export default function ListingsPage() {
             )}
 
             <div className="card overflow-hidden p-0">
-              {listings.length === 0 ? (
+              {sortedListings.length === 0 ? (
                 <div className="p-8 text-center">
                   <p className="text-muted-foreground">No listings found. Create your first listing!</p>
                   <Link 
@@ -342,18 +306,10 @@ export default function ListingsPage() {
                       <tr className="border-b text-left text-xs font-medium text-muted-foreground">
                         <th className="px-4 py-3 font-medium">
                           <button
-                            onClick={() => handleSort("title")}
+                            onClick={() => handleSort("location")}
                             className="inline-flex items-center gap-1"
                           >
-                            Listing <ArrowUpDown className="h-3 w-3" />
-                          </button>
-                        </th>
-                        <th className="px-4 py-3 font-medium">
-                          <button
-                            onClick={() => handleSort("category")}
-                            className="inline-flex items-center gap-1"
-                          >
-                            Category <ArrowUpDown className="h-3 w-3" />
+                            Location <ArrowUpDown className="h-3 w-3" />
                           </button>
                         </th>
                         <th className="px-4 py-3 font-medium">
@@ -362,22 +318,6 @@ export default function ListingsPage() {
                             className="inline-flex items-center gap-1"
                           >
                             Status <ArrowUpDown className="h-3 w-3" />
-                          </button>
-                        </th>
-                        <th className="px-4 py-3 font-medium">
-                          <button
-                            onClick={() => handleSort("featured")}
-                            className="inline-flex items-center gap-1"
-                          >
-                            Featured <ArrowUpDown className="h-3 w-3" />
-                          </button>
-                        </th>
-                        <th className="px-4 py-3 font-medium">
-                          <button
-                            onClick={() => handleSort("views")}
-                            className="inline-flex items-center gap-1"
-                          >
-                            Views <ArrowUpDown className="h-3 w-3" />
                           </button>
                         </th>
                         <th className="px-4 py-3 font-medium">
@@ -398,37 +338,18 @@ export default function ListingsPage() {
                             <div className="flex items-center gap-3">
                               <img
                                 src={listing.thumbnail || listing.image_url || "https://placehold.co/100x60/png"}
-                                alt={listing.title || listing.name_en}
+                                alt={listing.location || `Listing ${listing.id.substring(0,6)}`}
                                 className="h-10 w-16 rounded object-cover"
                               />
                               <div>
-                                <div className="font-medium">{listing.title || listing.name_en}</div>
+                                <div className="font-medium">{listing.location || `Listing ${listing.id.substring(0,6)}`}</div>
                               </div>
                             </div>
                           </td>
                           <td className="px-4 py-3 text-sm">
-                            <span className="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
-                              {listing.category}
+                            <span className={`badge ${listing.status === "Published" ? "badge-success" : "badge-secondary"}`}>
+                              {listing.status}
                             </span>
-                          </td>
-                          <td className="px-4 py-3 text-sm">
-                            {listing.status === "Published" ? (
-                              <span className="inline-flex items-center gap-1 text-green-600">
-                                <CheckCircle className="h-3.5 w-3.5" />
-                                Published
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 text-amber-600">
-                                <AlertCircle className="h-3.5 w-3.5" />
-                                Draft
-                              </span>
-                            )}
-                          </td>
-                          <td className="px-4 py-3 text-sm">
-                            {listing.featured ? "Yes" : "No"}
-                          </td>
-                          <td className="px-4 py-3 text-sm">
-                            {(listing.views || 0).toLocaleString()}
                           </td>
                           <td className="px-4 py-3 text-sm">
                             {formatDate(listing.updated_at)}

@@ -6,38 +6,27 @@ import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 
 export default function LoginPage() {
-  const [email, setEmail] = useState("admin@example.com");
-  const [password, setPassword] = useState("password123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const { user, signIn, loading, error: authError } = useAuth();
   const router = useRouter();
 
-  // Redirect if already logged in
-  useEffect(() => {
-    if (user) {
-      router.push("/dashboard");
-    }
-  }, [user, router]);
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
     setIsSubmitting(true);
 
     try {
-      console.log("Signing in with:", email, password);
+      console.log("Attempting sign in with Supabase...");
       await signIn(email, password);
-      // Redirect will happen automatically in the AuthProvider
     } catch (err: any) {
-      console.error("Login error:", err);
-      setError(err.message || "Failed to sign in. Please check your credentials.");
+      console.error("Unexpected error during handleSubmit:", err);
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  if (loading) {
+  if (loading && !user) {
     return (
       <div className="flex h-screen items-center justify-center">
         <div className="flex flex-col items-center">
@@ -61,9 +50,9 @@ export default function LoginPage() {
 
         <div className="card">
           <form onSubmit={handleSubmit} className="space-y-6">
-            {(error || authError) && (
+            {authError && (
               <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                {error || authError}
+                {authError}
               </div>
             )}
 
@@ -78,6 +67,7 @@ export default function LoginPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 className="input-field w-full"
                 required
+                autoComplete="email"
               />
             </div>
 
@@ -92,6 +82,7 @@ export default function LoginPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 className="input-field w-full"
                 required
+                autoComplete="current-password"
               />
             </div>
 

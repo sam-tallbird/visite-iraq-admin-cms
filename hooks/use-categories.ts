@@ -1,93 +1,63 @@
 import { useState, useEffect } from 'react';
-import { 
-  collection, 
-  getDocs, 
-  query, 
-  orderBy, 
-  DocumentData,
-  Firestore
-} from 'firebase/firestore';
-import { db as firestoreDB, firebaseInitialized } from '@/lib/firebase';
+import { useSupabaseTable, SupabaseStatus } from './use-supabase'; // Use the refactored Supabase hook
+import type { PostgrestError } from '@supabase/supabase-js';
 
-const db = firestoreDB as Firestore;
-
+// Interface matching the 'categories' and 'category_translations' tables
+// We'll need to join these in the component or fetch translations separately for now
 export interface Category {
-  id: string;
-  docId: string;
-  name: string;
-  displayName?: string;
+  id: string; // From categories table (UUID)
+  created_at?: string;
+  updated_at?: string;
+  // Fields from category_translations (will need fetching/joining)
+  name?: string; // e.g., from translation in default language
+  description?: string;
+  icon_url?: string;
+  slug?: string;
+  // How to handle order? Assuming it's on the main categories table if needed
   order?: number;
 }
 
-export function useCategories() {
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
+// Define the result type
+interface UseCategoriesResult {
+  categories: Category[];
+  loading: boolean;
+  error: PostgrestError | null;
+  refresh: () => Promise<void>;
+}
 
-  useEffect(() => {
-    async function fetchCategories() {
-      if (!firebaseInitialized || !db) {
-        console.error('Firebase not initialized');
-        setLoading(false);
-        return;
-      }
+/**
+ * Hook to fetch category data from Supabase.
+ * Currently fetches from the main 'categories' table.
+ * Does NOT yet handle fetching related translations.
+ */
+export function useCategories(): UseCategoriesResult {
+  // Use the Supabase table hook to fetch from the 'categories' table
+  const { 
+    data,
+    status,
+    error,
+    refresh
+  } = useSupabaseTable('categories'); // Specify the table name
 
-      try {
-        setLoading(true);
-        setError(null);
-        
-        // Query categories collection ordered by the order field if it exists, otherwise by name_en
-        const categoriesQuery = query(
-          collection(db, 'categories'),
-          orderBy('name_en', 'asc')
-        );
+  // Adapt the status to a simple boolean loading state
+  const loading = status === 'loading';
 
-        const querySnapshot = await getDocs(categoriesQuery);
-        const fetchedCategories: Category[] = [];
+  // The data returned by useSupabaseTable is generic SupabaseData[]
+  // We cast it to Category[] here, assuming the structure matches.
+  // TODO: Implement proper fetching/joining of category_translations
+  const categories = (data as Category[] | null) || [];
 
-        // Process the fetched categories - no default/fallback categories
-        if (!querySnapshot.empty) {
-          querySnapshot.forEach((doc) => {
-            const data = doc.data();
-            fetchedCategories.push({
-              id: doc.id,
-              docId: doc.id,
-              name: data.name_en || doc.id,
-              displayName: data.name_en || doc.id,
-              order: data.order || 999
-            });
-          });
-          
-          // Sort categories by order
-          fetchedCategories.sort((a, b) => (a.order || 999) - (b.order || 999));
-          setCategories(fetchedCategories);
-        } else {
-          // Remove fallback categories as they should come from Firestore
-          setCategories([]);
-        }
-      } catch (err) {
-        console.error('Error fetching categories:', err);
-        setError(err instanceof Error ? err : new Error('Failed to fetch categories'));
-        
-        // Fallback to default categories if there's an error
-        const defaultCategories: Category[] = [
-          { id: 'museums', docId: 'museums', name: 'Museums', displayName: 'Museums', order: 1 },
-          { id: 'historical_sites', docId: 'historical_sites', name: 'Historical Sites', displayName: 'Historical Sites', order: 2 },
-          { id: 'parks_nature', docId: 'parks_nature', name: 'Parks & Nature', displayName: 'Parks & Nature', order: 3 },
-          { id: 'religious_sites', docId: 'religious_sites', name: 'Religious Sites', displayName: 'Religious Sites', order: 4 },
-          { id: 'shopping', docId: 'shopping', name: 'Shopping', displayName: 'Shopping', order: 5 },
-          { id: 'restaurants', docId: 'restaurants', name: 'Restaurants', displayName: 'Restaurants', order: 6 },
-          { id: 'experiences', docId: 'experiences', name: 'Experiences', displayName: 'Experiences', order: 7 }
-        ];
-        
-        setCategories(defaultCategories);
-      } finally {
-        setLoading(false);
-      }
-    }
+  // Example of how you might sort if needed (assuming an 'order' column exists)
+  // useEffect(() => {
+  //   if (categories) {
+  //     categories.sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
+  //   }
+  // }, [categories]);
 
-    fetchCategories();
-  }, []);
-
-  return { categories, loading, error };
+  return { 
+    categories, 
+    loading, 
+    error, // Pass through the error from useSupabaseTable
+    refresh // Pass through the refresh function
+  };
 } 

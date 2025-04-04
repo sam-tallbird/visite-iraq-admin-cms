@@ -11,7 +11,8 @@ import {
   ChevronDown,
   LogOut,
   Home,
-  MapPin
+  MapPin,
+  LayoutTemplate
 } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "@/providers/auth-provider";
@@ -143,6 +144,12 @@ export default function Sidebar({ isMobile, onItemClick }: SidebarProps) {
       hasSubMenu: true,
       subMenuOpen: contentOpen,
       onSubMenuToggle: toggleContent
+    },
+    { 
+      href: "/dashboard/appearance/hero-banners", 
+      icon: <LayoutTemplate className="h-5 w-5" />,
+      title: "Appearance",
+      active: pathname.startsWith("/dashboard/appearance")
     },
     { 
       href: "/dashboard/users", 

@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { ListingImage, useListingImages } from '@/hooks/use-listing-images';
+import { useState, useEffect, useCallback } from 'react';
+import { ListingMedia, useListingMedia } from '@/hooks/use-listing-images';
 import { ImageUpload } from '@/components/ImageUpload';
 import { 
   Trash2, 
@@ -16,60 +16,78 @@ import {
 
 interface ListingImageManagerProps {
   listingId?: string;
-  onImagesChange?: (images: ListingImage[]) => void;
+  onImagesChange?: (images: ListingMedia[]) => void;
 }
 
 export function ListingImageManager({ listingId, onImagesChange }: ListingImageManagerProps) {
   const {
-    images,
+    media,
     loading,
     error,
-    addImage,
-    updateImage,
-    deleteImage,
-    setPrimaryImage
-  } = useListingImages(listingId);
+    addMedia,
+    updateMedia,
+    deleteMedia,
+    setPrimaryMedia
+  } = useListingMedia(listingId);
 
   const [editingImageId, setEditingImageId] = useState<string | null>(null);
-  const [captionEn, setCaptionEn] = useState<string>('');
-  const [captionAr, setCaptionAr] = useState<string>('');
+  const [captionEn, setCaptionEn] = useState<string | undefined>('');
+  const [captionAr, setCaptionAr] = useState<string | undefined>('');
 
-  // Pass images up to parent component when they change
+  // Pass media up to parent component when they change
   useEffect(() => {
     if (onImagesChange) {
-      onImagesChange(images);
+      onImagesChange(media);
     }
-  }, [images, onImagesChange]);
+  }, [media, onImagesChange]);
 
-  const handleImageUploaded = async (url: string) => {
+  const handleImageUploaded = useCallback(async (uploadResult: { url: string; filePath: string } | string | null) => {
     if (!listingId) {
       console.error('ListingId is required to upload images');
       return;
     }
+    let imageUrl: string | null = null;
+    let imageFilePath: string | null = null;
 
-    await addImage({
-      image_url: url,
+    if (typeof uploadResult === 'object' && uploadResult !== null) {
+        imageUrl = uploadResult.url;
+        imageFilePath = uploadResult.filePath;
+    } else if (typeof uploadResult === 'string') {
+        imageUrl = uploadResult;
+    } else {
+        console.error('Invalid upload result');
+        return;
+    }
+    
+    if (!imageUrl) {
+        console.error('Failed to get image URL from upload result');
+        return;
+    }
+
+    await addMedia({
+      url: imageUrl!,
+      file_path: imageFilePath,
       listing_id: listingId,
-      caption_en: '',
-      caption_ar: '',
-      is_primary: images.length === 0 // Make first image primary
+      description: '',
+      is_primary: media.length === 0,
+      media_type: 'image',
     });
-  };
+  }, [listingId, addMedia, media]);
 
   const handleDeleteImage = async (id: string) => {
     if (confirm('Are you sure you want to delete this image?')) {
-      await deleteImage(id);
+      await deleteMedia(id);
     }
   };
 
   const handleSetPrimary = async (id: string) => {
-    await setPrimaryImage(id);
+    await setPrimaryMedia(id);
   };
 
-  const startEditing = (image: ListingImage) => {
+  const startEditing = (image: ListingMedia) => {
     setEditingImageId(image.id!);
-    setCaptionEn(image.caption_en);
-    setCaptionAr(image.caption_ar);
+    setCaptionEn(image.description || '');
+    setCaptionAr('');
   };
 
   const cancelEditing = () => {
@@ -80,9 +98,8 @@ export function ListingImageManager({ listingId, onImagesChange }: ListingImageM
 
   const saveEditing = async () => {
     if (editingImageId) {
-      await updateImage(editingImageId, {
-        caption_en: captionEn,
-        caption_ar: captionAr
+      await updateMedia(editingImageId, {
+        description: captionEn,
       });
       cancelEditing();
     }
@@ -114,23 +131,24 @@ export function ListingImageManager({ listingId, onImagesChange }: ListingImageM
         </div>
       )}
 
-      {/* Image upload area */}
+      {/* Image upload area - Fix props */}
       <div className="border border-dashed border-gray-300 rounded-md p-4">
         <ImageUpload 
-          onImageUploaded={handleImageUploaded} 
-          storagePath="listing_images" 
+          onImageUploaded={handleImageUploaded}
+          bucketName="listing-media"
+          storagePathPrefix="listings"
         />
       </div>
 
       {/* Images grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
-        {images.map((image) => (
+        {media.map((image) => (
           <div key={image.id} className="border rounded-md overflow-hidden bg-card">
             {/* Image preview */}
             <div className="relative aspect-video bg-muted">
               <img 
-                src={image.image_url} 
-                alt={image.caption_en} 
+                src={image.url}
+                alt={image.description || 'Listing image'}
                 className="w-full h-full object-cover"
               />
               {/* Primary badge */}
@@ -188,8 +206,8 @@ export function ListingImageManager({ listingId, onImagesChange }: ListingImageM
               <div className="p-3">
                 {/* Caption display */}
                 <div className="mb-2 min-h-[40px]">
-                  {image.caption_en ? (
-                    <p className="text-sm font-medium line-clamp-2">{image.caption_en}</p>
+                  {image.description ? (
+                    <p className="text-sm font-medium line-clamp-2">{image.description}</p>
                   ) : (
                     <p className="text-sm text-muted-foreground italic">No caption</p>
                   )}
@@ -232,7 +250,7 @@ export function ListingImageManager({ listingId, onImagesChange }: ListingImageM
         ))}
 
         {/* Empty state */}
-        {!loading && images.length === 0 && (
+        {!loading && media.length === 0 && (
           <div className="col-span-full border rounded-md p-8 text-center bg-muted/30">
             <ImageIcon className="h-12 w-12 mx-auto text-muted-foreground/60" />
             <h3 className="mt-4 text-lg font-medium">No images yet</h3>
