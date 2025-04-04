@@ -268,133 +268,161 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
     categoriesError ||
     categoryTranslationsError;
 
+  // --- Effect to find specific translations and category links for this listing ---
+  // This effect now ONLY sets the intermediate state. 
+  // The form population effect will use the raw data.
   useEffect(() => {
-    if (allTranslations) {
+    // ... (existing logic to find en, ar, links and call setTranslationEn/Ar/ExistingCategoryLinks) ...
+    // This part remains the same
+    console.log(`%c[EditListingForm] Running effect to find translations/links - Listing ID: ${listingId}`, 'color: teal');
+    if (allTranslations && listingId) {
+      console.log("[EditListingForm] All translations available, finding specific ones...");
       const en = allTranslations.find(
         (t) => t.listing_id === listingId && t.language_code === "en"
-      );
+      ) as ListingTranslation | null;
       const ar = allTranslations.find(
         (t) => t.listing_id === listingId && t.language_code === "ar"
-      );
-      setTranslationEn((en as ListingTranslation) || null);
-      setTranslationAr((ar as ListingTranslation) || null);
+      ) as ListingTranslation | null;
+      console.log("[EditListingForm] Found EN:", en ? 'Yes' : 'No', "Found AR:", ar ? 'Yes' : 'No');
+      setTranslationEn(en);
+      setTranslationAr(ar);
+    } else {
+      console.log("[EditListingForm] All translations not yet available or no listingId.");
+      setTranslationEn(null); // Reset if listingId changes or translations disappear
+      setTranslationAr(null);
     }
-  }, [allTranslations, listingId]);
 
-  useEffect(() => {
-    if (allCategoryLinks) {
+    if (allCategoryLinks && listingId) {
+      console.log("[EditListingForm] All category links available, finding specific ones...");
       const links = allCategoryLinks.filter(
         (link) => link.listing_id === listingId
-      );
-      setExistingCategoryLinks((links as ListingCategoryLink[]) || []);
+      ) as ListingCategoryLink[];
+       console.log(`[EditListingForm] Found ${links.length} category links for this listing.`);
+      setExistingCategoryLinks(links);
+    } else {
+       console.log("[EditListingForm] All category links not yet available or no listingId.");
+      setExistingCategoryLinks([]); // Reset
     }
-  }, [allCategoryLinks, listingId]);
+  }, [allTranslations, allCategoryLinks, listingId]);
 
-  // Populate form data only once when all necessary data has loaded successfully
+  // --- Effect to Populate Form Data on Initial Load (REVISED) ---
   useEffect(() => {
-    // Log values *before* the check
-    console.log("[EditListingForm] Population Effect Check:", { 
-        hasListing: !!listing, 
-        hasTransEn: !!translationEn, 
-        hasTransAr: !!translationAr, 
-        hasLinks: !!existingCategoryLinks, 
-        isInitialDataLoaded 
+    console.log(`%c[EditListingForm] Running REVISED effect to populate form data`, 'color: green');
+    console.log("[EditListingForm] Dependencies for REVISED populate effect:", {
+        listingExists: !!listing,
+        allTranslationsExist: !!allTranslations,
+        allCategoryLinksExist: !!allCategoryLinks,
+        isInitialDataLoaded
     });
-    
-    // Only populate if listing data exists AND initial load hasn't happened yet
-    if (listing && translationEn && translationAr && existingCategoryLinks && !isInitialDataLoaded) {
-      console.log("[EditListingForm] Populating form data for the first time (Inside IF block)");
-      const currentCategoryIds = existingCategoryLinks.map(link => link.category_id);
-      
-      // Helper to safely join array or return empty string
-      const joinArray = (arr: string[] | null | undefined): string => arr ? arr.join(', ') : '';
-      
-      const initialFormData = {
-        // Populate Listing fields
-        location: listing.location || "",
-        google_maps_link: listing.google_maps_link || "",
-        latitude: listing.latitude?.toString() || "",
-        longitude: listing.longitude?.toString() || "",
-        location_id: listing.location_id || null,
-        tags: joinArray(listing.tags),
-        listing_type: (listing as Listing).listing_type || "",
-        
-        // Populate English Translation fields
-        name_en: translationEn.name || "",
-        description_en: translationEn.description || "",
-        opening_hours_en: translationEn.opening_hours || "",
-        popular_stores_en: joinArray(translationEn.popular_stores),
-        entertainment_en: joinArray(translationEn.entertainment),
-        dining_options_en: joinArray(translationEn.dining_options),
-        special_services_en: joinArray(translationEn.special_services),
-        nearby_attractions_en: joinArray(translationEn.nearby_attractions),
-        parking_info_en: translationEn.parking_info || "",
-        cuisine_type_en: translationEn.cuisine_type || "",
-        story_behind_en: translationEn.story_behind || "",
-        menu_highlights_en: joinArray(translationEn.menu_highlights),
-        price_range_en: translationEn.price_range || "",
-        dietary_options_en: joinArray(translationEn.dietary_options),
-        reservation_info_en: translationEn.reservation_info || "",
-        seating_options_en: joinArray(translationEn.seating_options),
-        special_features_en: joinArray(translationEn.special_features),
-        historical_significance_en: translationEn.historical_significance || "",
-        entry_fee_en: translationEn.entry_fee || "",
-        best_time_to_visit_en: translationEn.best_time_to_visit || "",
-        tour_guide_availability_en: translationEn.tour_guide_availability || "",
-        tips_en: translationEn.tips || "",
-        activities_en: joinArray(translationEn.activities),
-        facilities_en: joinArray(translationEn.facilities),
-        safety_tips_en: translationEn.safety_tips || "",
-        duration_en: translationEn.duration || "",
-        highlights_en: joinArray(translationEn.highlights),
-        religious_significance_en: translationEn.religious_significance || "",
-        entry_rules_en: translationEn.entry_rules || "",
-        slug_en: translationEn.slug || "",
 
-        // Populate Arabic Translation fields
-        name_ar: translationAr.name || "",
-        description_ar: translationAr.description || "",
-        opening_hours_ar: translationAr.opening_hours || "",
-        popular_stores_ar: joinArray(translationAr.popular_stores),
-        entertainment_ar: joinArray(translationAr.entertainment),
-        dining_options_ar: joinArray(translationAr.dining_options),
-        special_services_ar: joinArray(translationAr.special_services),
-        nearby_attractions_ar: joinArray(translationAr.nearby_attractions),
-        parking_info_ar: translationAr.parking_info || "",
-        cuisine_type_ar: translationAr.cuisine_type || "",
-        story_behind_ar: translationAr.story_behind || "",
-        menu_highlights_ar: joinArray(translationAr.menu_highlights),
-        price_range_ar: translationAr.price_range || "",
-        dietary_options_ar: joinArray(translationAr.dietary_options),
-        reservation_info_ar: translationAr.reservation_info || "",
-        seating_options_ar: joinArray(translationAr.seating_options),
-        special_features_ar: joinArray(translationAr.special_features),
-        historical_significance_ar: translationAr.historical_significance || "",
-        entry_fee_ar: translationAr.entry_fee || "",
-        best_time_to_visit_ar: translationAr.best_time_to_visit || "",
-        tour_guide_availability_ar: translationAr.tour_guide_availability || "",
-        tips_ar: translationAr.tips || "",
-        activities_ar: joinArray(translationAr.activities),
-        facilities_ar: joinArray(translationAr.facilities),
-        safety_tips_ar: translationAr.safety_tips || "",
-        duration_ar: translationAr.duration || "",
-        highlights_ar: joinArray(translationAr.highlights),
-        religious_significance_ar: translationAr.religious_significance || "",
-        entry_rules_ar: translationAr.entry_rules || "",
-        slug_ar: translationAr.slug || "",
+    // Populate only if base listing data exists AND initial load hasn't happened
+    if (listing && !isInitialDataLoaded && allTranslations && allCategoryLinks) {
+       console.log('[EditListingForm] REVISED: Dependencies met, attempting to populate...');
 
-        // Populate Category IDs
-        categoryIds: currentCategoryIds,
-      };
+       // Re-find translations and links directly within this effect
+       const en = allTranslations.find(t => t.listing_id === listingId && t.language_code === 'en');
+       const ar = allTranslations.find(t => t.listing_id === listingId && t.language_code === 'ar');
+       const links = allCategoryLinks.filter(link => link.listing_id === listingId);
+       const currentCategoryIds = links.map(link => link.category_id);
 
-      console.log(`%c[EditListingForm] Initial listing_type from DB: ${(listing as Listing).listing_type}`, "color: green; background: #eee;"); // <-- Log initial DB value
-      console.log(`%c[EditListingForm] Setting initial formData.listing_type to: ${initialFormData.listing_type}`, "color: blue; background: #eee;"); // <-- Log value being set
+       // Only proceed if all pieces are found
+       if (en && ar && links) {
+          console.log('[EditListingForm] REVISED: Found en, ar, links. Preparing initialFormData...');
+          const joinArray = (arr: string[] | null | undefined): string => arr ? arr.join(', ') : '';
 
-      console.log("%c[EditListingForm] Calling setFormData from initial population useEffect", "color: orange"); // Log before call
-      setFormData(initialFormData);
-      setIsInitialDataLoaded(true); // <-- Set flag after initial population
+          // --- Reconstruct initialFormData using en, ar, listing --- 
+          // (Ensure ALL fields from the original state are populated here)
+          const initialFormData = {
+            // Listing fields
+            location: listing.location || "",
+            google_maps_link: listing.google_maps_link || "",
+            latitude: listing.latitude?.toString() || "",
+            longitude: listing.longitude?.toString() || "",
+            location_id: listing.location_id || null,
+            tags: joinArray(listing.tags),
+            listing_type: (listing as Listing).listing_type || "",
+            
+            // English Translation fields (using 'en')
+            name_en: en.name || "",
+            description_en: en.description || "",
+            opening_hours_en: en.opening_hours || "",
+            popular_stores_en: joinArray(en.popular_stores),
+            entertainment_en: joinArray(en.entertainment),
+            dining_options_en: joinArray(en.dining_options),
+            special_services_en: joinArray(en.special_services),
+            nearby_attractions_en: joinArray(en.nearby_attractions),
+            parking_info_en: en.parking_info || "",
+            cuisine_type_en: en.cuisine_type || "",
+            story_behind_en: en.story_behind || "",
+            menu_highlights_en: joinArray(en.menu_highlights),
+            price_range_en: en.price_range || "",
+            dietary_options_en: joinArray(en.dietary_options),
+            reservation_info_en: en.reservation_info || "",
+            seating_options_en: joinArray(en.seating_options),
+            special_features_en: joinArray(en.special_features),
+            historical_significance_en: en.historical_significance || "",
+            entry_fee_en: en.entry_fee || "",
+            best_time_to_visit_en: en.best_time_to_visit || "",
+            tour_guide_availability_en: en.tour_guide_availability || "",
+            tips_en: en.tips || "",
+            activities_en: joinArray(en.activities),
+            facilities_en: joinArray(en.facilities),
+            safety_tips_en: en.safety_tips || "",
+            duration_en: en.duration || "",
+            highlights_en: joinArray(en.highlights),
+            religious_significance_en: en.religious_significance || "",
+            entry_rules_en: en.entry_rules || "",
+            slug_en: en.slug || "",
+
+            // Arabic Translation fields (using 'ar')
+            name_ar: ar.name || "",
+            description_ar: ar.description || "",
+            opening_hours_ar: ar.opening_hours || "",
+            popular_stores_ar: joinArray(ar.popular_stores),
+            entertainment_ar: joinArray(ar.entertainment),
+            dining_options_ar: joinArray(ar.dining_options),
+            special_services_ar: joinArray(ar.special_services),
+            nearby_attractions_ar: joinArray(ar.nearby_attractions),
+            parking_info_ar: ar.parking_info || "",
+            cuisine_type_ar: ar.cuisine_type || "",
+            story_behind_ar: ar.story_behind || "",
+            menu_highlights_ar: joinArray(ar.menu_highlights),
+            price_range_ar: ar.price_range || "",
+            dietary_options_ar: joinArray(ar.dietary_options),
+            reservation_info_ar: ar.reservation_info || "",
+            seating_options_ar: joinArray(ar.seating_options),
+            special_features_ar: joinArray(ar.special_features),
+            historical_significance_ar: ar.historical_significance || "",
+            entry_fee_ar: ar.entry_fee || "",
+            best_time_to_visit_ar: ar.best_time_to_visit || "",
+            tour_guide_availability_ar: ar.tour_guide_availability || "",
+            tips_ar: ar.tips || "",
+            activities_ar: joinArray(ar.activities),
+            facilities_ar: joinArray(ar.facilities),
+            safety_tips_ar: ar.safety_tips || "",
+            duration_ar: ar.duration || "",
+            highlights_ar: joinArray(ar.highlights),
+            religious_significance_ar: ar.religious_significance || "",
+            entry_rules_ar: ar.entry_rules || "",
+            slug_ar: ar.slug || "",
+
+            // Category IDs
+            categoryIds: currentCategoryIds,
+          };
+          // --- End Reconstruction ---
+
+          console.log(`%c[EditListingForm] REVISED: Setting initial formData.listing_type to: ${initialFormData.listing_type}`, "color: blue; background: #eee;");
+          console.log("%c[EditListingForm] REVISED: Calling setFormData from initial population useEffect", "color: orange");
+          setFormData(initialFormData);
+          setIsInitialDataLoaded(true); // Set flag after initial population
+       } else {
+          console.warn('[EditListingForm] REVISED: Could not find required translations or links even though base data is present. Form data not set.');
+       }
+    } else {
+       console.log('[EditListingForm] REVISED: Conditions not met for population (missing listing, already loaded, or missing raw translation/link data)');
     }
-  }, [listing, translationEn, translationAr, existingCategoryLinks, isInitialDataLoaded]);
+  // Depend only on raw data sources, the flag, and listingId
+  }, [listing, allTranslations, allCategoryLinks, isInitialDataLoaded, listingId]);
 
   // Effect to combine categories and translations
   useEffect(() => {
