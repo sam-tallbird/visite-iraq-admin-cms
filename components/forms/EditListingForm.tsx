@@ -737,8 +737,13 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                     <Select 
                         name="listing_type" 
                         onValueChange={(value) => {
-                            console.log(`[EditListingForm] Listing Type changing to:`, value);
-                            setFormData((prev) => ({ ...prev, listing_type: value }));
+                            console.log(`[EditListingForm] Listing Type onValueChange triggered with:`, value);
+                            // ONLY update if the value is not empty, preventing the reset
+                            if (value !== "") {
+                                setFormData((prev) => ({ ...prev, listing_type: value }));
+                            } else {
+                                console.log(`[EditListingForm] Ignoring empty value from onValueChange`);
+                            }
                         }} 
                         value={formData.listing_type}
                     >
