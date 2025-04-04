@@ -736,7 +736,10 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                     <Label htmlFor="listing_type">Listing Type *</Label>
                     <Select 
                         name="listing_type" 
-                        onValueChange={(value: string) => handleChange({ target: { name: 'listing_type', value } } as any)} 
+                        onValueChange={(value) => {
+                            console.log(`[EditListingForm] Listing Type changing to:`, value);
+                            setFormData((prev) => ({ ...prev, listing_type: value }));
+                        }} 
                         value={formData.listing_type}
                     >
                         <SelectTrigger id="listing_type">

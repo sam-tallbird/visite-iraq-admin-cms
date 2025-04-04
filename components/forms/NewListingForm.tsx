@@ -548,7 +548,10 @@ export function NewListingForm() {
          <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-6">
              <div className="space-y-2">
                 <Label htmlFor="listing_type">Listing Type *</Label>
-                <Select name="listing_type" onValueChange={(value: string) => handleChange({ target: { name: 'listing_type', value } } as any)} value={formData.listing_type}>
+                <Select name="listing_type" onValueChange={(value: string) => {
+                    console.log("[NewListingForm] Listing Type changing to:", value);
+                    handleChange({ target: { name: 'listing_type', value } } as any);
+                }} value={formData.listing_type} required>
                     <SelectTrigger id="listing_type">
                         <SelectValue placeholder="Select Listing Type" />
                     </SelectTrigger>
