@@ -172,7 +172,7 @@ export default function HeroBannersPage() {
 
         if (errors.length > 0) {
             console.error("Error updating display order:", errors);
-            throw new Error(`Failed to update order: ${errors.map(e => e.message).join(', ')}`);
+            throw new Error(`Failed to update order: ${errors.map(e => e?.message).join(', ')}`);
         }
 
         // Refresh data from DB to confirm changes
@@ -298,9 +298,11 @@ export default function HeroBannersPage() {
                                height={36}
                                className="object-cover rounded"
                                // Add error handling for broken images if needed
-                               onError={(e) => { 
-                                   if (e && e.currentTarget) { // Check if e and currentTarget exist
-                                       e.currentTarget.src = '/placeholder-image.png'; /* Provide a fallback */ 
+                               onError={(e) => {
+                                   // Cast target to HTMLImageElement after checking
+                                   const imgTarget = e.currentTarget as HTMLImageElement;
+                                   if (imgTarget) {
+                                       imgTarget.src = '/placeholder-image.png'; /* Provide a fallback */
                                    }
                                }}
                                unoptimized // Add if using Supabase free tier storage
