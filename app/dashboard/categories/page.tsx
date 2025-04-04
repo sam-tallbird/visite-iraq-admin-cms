@@ -531,7 +531,6 @@ export default function CategoriesPage() {
                 bucketName={CATEGORY_IMAGE_BUCKET}
                 storagePathPrefix="categories"
                 onImageUploaded={handleImageUpload}
-                existingImageUrl={imageUrl}
                 className="pt-2"
               />
               
@@ -598,7 +597,6 @@ export default function CategoriesPage() {
                 bucketName={CATEGORY_IMAGE_BUCKET}
                 storagePathPrefix="categories"
                 onImageUploaded={handleImageUpload}
-                existingImageUrl={imageUrl}
                 className="pt-2"
               />
               
