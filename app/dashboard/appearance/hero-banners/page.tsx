@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from 'next/navigation';
 import { useAuth } from "@/providers/auth-provider";
 // Make sure the path to client helper is correct if it differs
 import { createClient } from "@/lib/supabase/client"; 
@@ -28,6 +29,7 @@ import {
     AlertCircle,
     ArrowUp,    // Using separate Up/Down arrows
     ArrowDown,
+    ChevronLeft,
 } from "lucide-react";
 import Image from 'next/image';
 
@@ -48,6 +50,7 @@ export default function HeroBannersPage() {
   // Use client from AuthProvider if it exposes it, otherwise create one
   const { supabase: authSupabase } = useAuth(); 
   const supabase = authSupabase || createClient(); // Fallback if not from context
+  const router = useRouter();
 
   const [banners, setBanners] = useState<HeroBannerWithTranslation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -234,7 +237,18 @@ export default function HeroBannersPage() {
 
 
   return (
-    <div className="container py-8">
+    <div className="p-4 md:p-6">
+      {/* Add Back Button */}
+      <Button 
+        variant="outline" 
+        size="sm" 
+        className="mb-4" 
+        onClick={() => router.back()}
+      >
+        <ChevronLeft className="mr-1 h-4 w-4" />
+        Back
+      </Button>
+
       {/* Restructure Header */}
       <div className="flex items-center justify-between gap-4 mb-6">
         <PageTitle
