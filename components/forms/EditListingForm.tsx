@@ -1,4 +1,4 @@
-import { useState, useRef, FormEvent, useEffect, useCallback, ChangeEvent } from "react";
+import { useState, useRef, FormEvent, useEffect, useCallback, ChangeEvent, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { 
@@ -21,6 +21,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
+import { MapDisplay } from "@/components/maps/MapDisplay";
 
 // --- NEW Interfaces based on Schema Dump ---
 interface Listing {
@@ -686,6 +687,18 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
       categoryTranslationsError: !!categoryTranslationsError 
   });
   // -----------------------------
+
+  // --- Memoize parsed coordinates --- 
+  const parsedLatitude = useMemo(() => {
+    const lat = parseFloat(formData.latitude);
+    return isNaN(lat) ? null : lat;
+  }, [formData.latitude]);
+
+  const parsedLongitude = useMemo(() => {
+    const lng = parseFloat(formData.longitude);
+    return isNaN(lng) ? null : lng;
+  }, [formData.longitude]);
+  // --------------------------------
 
   if (combinedError) {
     return (
