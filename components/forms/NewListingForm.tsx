@@ -1,4 +1,4 @@
-import { useState, useRef, FormEvent, useEffect, ChangeEvent } from "react";
+import { useState, useRef, FormEvent, useEffect, ChangeEvent, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { 
@@ -20,9 +20,11 @@ import { Input } from "@/components/ui/input";
 import Image from 'next/image';
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
+import { MapDisplay } from '../maps/MapDisplay';
 
 // --- Define Listing Types ---
 const LISTING_TYPES = [
@@ -99,7 +101,18 @@ interface DisplayCategory extends Category {
   translation_en_id?: string;
   translation_ar_id?: string;
 }
-// --- End of Interfaces ---
+
+// Add Collection Interfaces
+interface CuratedCollection { 
+  id: string;
+  name_en: string; 
+}
+interface CollectionSelectionState {
+  [collectionId: string]: {
+    selected: boolean;
+    featured: boolean;
+  };
+}
 
 // Helper function - moved from HeroBannerForm / new page
 const generateUniqueFilename = (file: File): string => {
@@ -120,6 +133,7 @@ export function NewListingForm() {
   const [saving, setSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [displayCategories, setDisplayCategories] = useState<DisplayCategory[]>([]);
+  const [isFetchingLocation, setIsFetchingLocation] = useState(false);
   const [slugEnManuallySet, setSlugEnManuallySet] = useState(false);
   const [slugArManuallySet, setSlugArManuallySet] = useState(false);
   const { supabase: authSupabase } = useAuth(); // Get supabase client
@@ -130,13 +144,21 @@ export function NewListingForm() {
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
   // ------------------------------------
   
+  // --- State for Collections ---
+  const [availableCollections, setAvailableCollections] = useState<CuratedCollection[]>([]);
+  const [collectionSelections, setCollectionSelections] = useState<CollectionSelectionState>({});
+  const [collectionsLoading, setCollectionsLoading] = useState(true);
+  // ----------------------------
+  
   const [formData, setFormData] = useState({
     listing_type: "", // Initialize as empty string
     location: "",
+    location_ar: "",
     google_maps_link: "",
     latitude: "",
     longitude: "",
     location_id: null as string | null,
+    google_place_id: null as string | null,
     tags: "",
     name_en: "",
     description_en: "",
@@ -232,6 +254,47 @@ export function NewListingForm() {
   // Combine loading states for categories (NEW)
   const categoriesCombinedLoading = categoriesLoading || categoryTranslationsStatus !== 'success';
   
+  // --- Fetch Available Collections ---
+  useEffect(() => {
+    const fetchCollectionData = async () => {
+      if (!supabase) return;
+      setCollectionsLoading(true);
+      console.log("[NewListingForm] Fetching available collections...");
+      try {
+        const { data: collectionsData, error: collectionsError } = await supabase
+          .from('curated_collections')
+          .select(`id, curated_collection_translations!inner(name)`)
+          .eq('curated_collection_translations.language_code', 'en')
+          .order('created_at', { ascending: true });
+          
+        if (collectionsError) throw collectionsError;
+
+        const formattedCollections: CuratedCollection[] = collectionsData?.map((c: any) => ({
+            id: c.id,
+            name_en: c.curated_collection_translations?.[0]?.name || 'Unnamed Collection'
+        })) || [];
+        setAvailableCollections(formattedCollections);
+        console.log("[NewListingForm] Available Collections:", formattedCollections);
+
+        // Initialize selection state (all deselected initially)
+        const initialSelections: CollectionSelectionState = {};
+        formattedCollections.forEach(coll => {
+          initialSelections[coll.id] = { selected: false, featured: false };
+        });
+        setCollectionSelections(initialSelections);
+
+      } catch (error: any) {
+        console.error("Error fetching collection data:", error);
+        setErrorMessage("Failed to load collection data: " + error.message);
+      } finally {
+        setCollectionsLoading(false);
+      }
+    };
+
+    fetchCollectionData();
+  }, [supabase]);
+  // ---------------------------------
+
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
     const newValue = type === 'checkbox' ? (e.target as HTMLInputElement).checked : value;
@@ -321,6 +384,74 @@ export function NewListingForm() {
       };
     });
   };
+
+  // --- Collection Selection Handler (Same as EditForm) ---
+  const handleCollectionChange = (collectionId: string, selected: boolean | string) => {
+      setCollectionSelections(prev => ({
+          ...prev,
+          [collectionId]: {
+              selected: typeof selected === 'string' ? (selected === 'true') : !!selected,
+              featured: typeof selected === 'string' ? (selected === 'true') : !!selected ? prev[collectionId]?.featured || false : false 
+          }
+      }));
+  };
+
+  const handleFeatureChange = (collectionId: string, featured: boolean) => {
+      setCollectionSelections(prev => ({
+          ...prev,
+          [collectionId]: {
+              ...prev[collectionId], 
+              featured: featured
+          }
+      }));
+  };
+
+  // --- NEW: Fetch Location Details Handler (Copied from Edit form) ---
+  const handleFetchLocationDetails = async () => {
+      const url = formData.google_maps_link;
+      if (!url || !url.trim()) {
+          setErrorMessage("Please enter a Google Maps link first.");
+          return;
+      }
+      
+      setIsFetchingLocation(true); 
+      setErrorMessage(null); 
+      console.log("[NewListingForm] Fetching location details for URL:", url);
+
+      try {
+          const response = await fetch('/api/location-lookup', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ url })
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+              console.error("Location Lookup API Error:", data);
+              throw new Error(data.message || `Failed to fetch location details (${response.status})`);
+          }
+
+          console.log("[NewListingForm] Location details received:", data);
+          
+          // Update form state with fetched data
+          setFormData(prev => ({
+              ...prev,
+              location: data.name_en || prev.location, 
+              location_ar: data.name_ar || '', 
+              latitude: data.latitude?.toString() || prev.latitude,
+              longitude: data.longitude?.toString() || prev.longitude,
+              google_place_id: data.google_place_id || null, 
+          }));
+
+      } catch (error: any) {
+          console.error("Failed to fetch location details:", error);
+          setErrorMessage(error.message || "An unexpected error occurred while fetching location details.");
+      } finally {
+          setIsFetchingLocation(false); 
+      }
+  };
+  // -----------------------------------------
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -532,6 +663,20 @@ export function NewListingForm() {
     }
   };
 
+  // --- Memoize parsed coordinates (Copied from Edit form) --- 
+  const parsedLatitude = useMemo(() => {
+    const lat = parseFloat(formData.latitude);
+    return isNaN(lat) ? null : lat;
+  }, [formData.latitude]);
+
+  const parsedLongitude = useMemo(() => {
+    const lng = parseFloat(formData.longitude);
+    return isNaN(lng) ? null : lng;
+  }, [formData.longitude]);
+  // --------------------------------
+  
+  // --- Loading States Combination ---
+
   return (
     <form ref={formRef} onSubmit={handleSubmit} className="space-y-8">
       {errorMessage && (
@@ -548,51 +693,30 @@ export function NewListingForm() {
          <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-6">
              <div className="space-y-2">
                 <Label htmlFor="listing_type">Listing Type *</Label>
-                <Select name="listing_type" onValueChange={(value: string) => {
-                    console.log("[NewListingForm] Listing Type changing to:", value);
-                    handleChange({ target: { name: 'listing_type', value } } as any);
-                }} value={formData.listing_type} required>
+                <Select 
+                    name="listing_type" 
+                    onValueChange={(value) => setFormData(prev => ({ ...prev, listing_type: value }))} // Simplified state update
+                    value={formData.listing_type} 
+                >
                     <SelectTrigger id="listing_type">
                         <SelectValue placeholder="Select Listing Type" />
                     </SelectTrigger>
                     <SelectContent>
-                        {LISTING_TYPES.filter(type => type.value !== "").map(type => (
-                            <SelectItem key={type.value} value={type.value} >
-                                {type.label}
-                            </SelectItem>
-                        ))}
+                        <SelectGroup>
+                           {LISTING_TYPES.filter(type => type.value !== "").map(type => (
+                               <SelectItem key={type.value} value={type.value} >
+                                   {type.label}
+                               </SelectItem>
+                           ))}
+                        </SelectGroup>
                     </SelectContent>
                 </Select>
              </div>
              
-             {/* Location Name */}
+             {/* Location Name EN */}
              <div className="space-y-2">
-                <Label htmlFor="location">Location Name *</Label>
-                <Input id="location" name="location" value={formData.location} onChange={handleChange} placeholder="e.g., Central Park Mall" required />
-             </div>
-
-             {/* Google Maps Link */}
-             <div className="space-y-2">
-                <Label htmlFor="google_maps_link">Google Maps Link</Label>
-                <Input id="google_maps_link" name="google_maps_link" type="url" value={formData.google_maps_link} onChange={handleChange} placeholder="https://maps.app.goo.gl/..." />
-             </div>
-
-             {/* Tags */}
-             <div className="space-y-2">
-                <Label htmlFor="tags">Tags (comma-separated)</Label>
-                <Input id="tags" name="tags" value={formData.tags} onChange={handleChange} placeholder="e.g., family-friendly, outdoor, shopping" />
-             </div>
-
-             {/* Latitude */}
-             <div className="space-y-2">
-                <Label htmlFor="latitude">Latitude</Label>
-                <Input id="latitude" name="latitude" type="number" step="any" value={formData.latitude} onChange={handleChange} placeholder="e.g., 24.7136" />
-             </div>
-
-             {/* Longitude */}
-             <div className="space-y-2">
-                <Label htmlFor="longitude">Longitude</Label>
-                <Input id="longitude" name="longitude" type="number" step="any" value={formData.longitude} onChange={handleChange} placeholder="e.g., 46.6753" />
+                <Label htmlFor="name_en">Location Name (English) *</Label>
+                <Input id="name_en" name="name_en" value={formData.name_en} onChange={handleChange} placeholder="e.g., Central Park Mall" required />
              </div>
          </CardContent>
       </Card>
@@ -664,244 +788,114 @@ export function NewListingForm() {
         </CardContent>
       </Card>
 
-      {/* --- NEW: Container for Side-by-Side Language Cards --- */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* --- English Content Card (Now on Left) --- */}
-          <Card>
-            <CardHeader><CardTitle>English Content</CardTitle></CardHeader>
-             {/* Changed inner grid to single column */}
-             <CardContent className="grid grid-cols-1 gap-6">
-                {/* === Always Shown Fields === */}
-                {/* Name EN */}
-                <div className="space-y-2">
-                    <Label htmlFor="name_en">Name (English) *</Label>
-                    <Input id="name_en" name="name_en" value={formData.name_en} onChange={handleChange} required />
-                </div>
-                 {/* Slug EN */}
-                 <div className="space-y-2">
-                     <Label htmlFor="slug_en">Slug (English)</Label>
-                     <Input id="slug_en" name="slug_en" value={formData.slug_en} onChange={handleChange} />
-                 </div>
-                 {/* Description EN */}
-                 <div className="space-y-2 md:col-span-2">
-                     <Label htmlFor="description_en">Description (English)</Label>
-                     <Textarea id="description_en" name="description_en" value={formData.description_en} onChange={handleChange} />
-                 </div>
-                  {/* Opening Hours EN */}
-                  <div className="space-y-2">
-                      <Label htmlFor="opening_hours_en">Opening Hours (English)</Label>
-                      <Input id="opening_hours_en" name="opening_hours_en" value={formData.opening_hours_en} onChange={handleChange} />
+      {/* --- NEW: Location Details Card (Partial) --- */}
+      <Card>
+          <CardHeader>
+              <CardTitle>Location Details</CardTitle>
+              <CardDescription>Set the location using a Google Maps link or by manually entering coordinates.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+              {/* Google Maps Link & Fetch */} 
+              <div className="space-y-2">
+                  <Label htmlFor="google_maps_link">Google Maps Link</Label>
+                  <div className="flex gap-2">
+                      <Input
+                          id="google_maps_link"
+                          name="google_maps_link"
+                          value={formData.google_maps_link}
+                          onChange={handleChange}
+                          placeholder="Paste Google Maps URL here"
+                      />
+                      <Button 
+                          type="button" 
+                          onClick={handleFetchLocationDetails} 
+                          disabled={isFetchingLocation || !formData.google_maps_link}
+                      >
+                          {isFetchingLocation ? "Fetching..." : "Fetch Details"}
+                      </Button>
                   </div>
+              </div>
 
-                {/* === Shop/Mall Specific Fields === */}
-                {formData.listing_type === 'Shop/Mall' && (
-                    <>
-                        <div className="space-y-2"><Label htmlFor="popular_stores_en">Popular Stores (English, comma-separated)</Label><Input id="popular_stores_en" name="popular_stores_en" value={formData.popular_stores_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="entertainment_en">Entertainment (English, comma-separated)</Label><Input id="entertainment_en" name="entertainment_en" value={formData.entertainment_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="dining_options_en">Dining Options (English, comma-separated)</Label><Input id="dining_options_en" name="dining_options_en" value={formData.dining_options_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="special_services_en">Special Services (English, comma-separated)</Label><Input id="special_services_en" name="special_services_en" value={formData.special_services_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
-                    </>
-                )}
+              {/* Tags */}
+              <div className="space-y-2">
+                  <Label htmlFor="tags">Tags (comma-separated)</Label>
+                  <Input 
+                      id="tags"
+                      name="tags"
+                      value={formData.tags}
+                      onChange={handleChange}
+                      placeholder="e.g., luxury, family-friendly, outdoor"
+                  />
+              </div>
+              
+              {/* English Address */} 
+              <div className="space-y-2">
+                  <Label htmlFor="location">Location Name / Address (English)</Label>
+                  <Textarea
+                      id="location"
+                      name="location"
+                      value={formData.location} 
+                      onChange={handleChange}
+                      placeholder="e.g., Main Street, Downtown"
+                  />
+              </div>
 
-                {/* === Restaurant/Café Specific Fields === */}
-                {formData.listing_type === 'Restaurant/Café' && (
-                    <>
-                        <div className="space-y-2"><Label htmlFor="cuisine_type_en">Cuisine Type (English)</Label><Input id="cuisine_type_en" name="cuisine_type_en" value={formData.cuisine_type_en} onChange={handleChange} /></div>
-                        <div className="space-y-2 md:col-span-2"><Label htmlFor="story_behind_en">Story Behind (English)</Label><Textarea id="story_behind_en" name="story_behind_en" value={formData.story_behind_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="menu_highlights_en">Menu Highlights (English, comma-separated)</Label><Input id="menu_highlights_en" name="menu_highlights_en" value={formData.menu_highlights_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="price_range_en">Price Range (English)</Label><Input id="price_range_en" name="price_range_en" value={formData.price_range_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="dietary_options_en">Dietary Options (English, comma-separated)</Label><Input id="dietary_options_en" name="dietary_options_en" value={formData.dietary_options_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="reservation_info_en">Reservation Info (English)</Label><Input id="reservation_info_en" name="reservation_info_en" value={formData.reservation_info_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="seating_options_en">Seating Options (English, comma-separated)</Label><Input id="seating_options_en" name="seating_options_en" value={formData.seating_options_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="special_features_en">Special Features (English, comma-separated)</Label><Input id="special_features_en" name="special_features_en" value={formData.special_features_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
-                    </>
-                )}
+              {/* Arabic Address */} 
+              <div className="space-y-2">
+                  <Label htmlFor="location_ar">Location Name / Address (Arabic)</Label>
+                  <Textarea 
+                      id="location_ar" 
+                      name="location_ar" 
+                      value={formData.location_ar} 
+                      onChange={handleChange} 
+                      placeholder="مثال: الشارع الرئيسي، وسط البلد" 
+                      dir="rtl" // Set text direction to right-to-left
+                  />
+              </div>
 
-                {/* === Historical Site Specific Fields === */}
-                {formData.listing_type === 'Historical Site' && (
-                    <>
-                        <div className="space-y-2 md:col-span-2"><Label htmlFor="historical_significance_en">Historical Significance (English)</Label><Textarea id="historical_significance_en" name="historical_significance_en" value={formData.historical_significance_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="entry_fee_en">Entry Fee (English)</Label><Input id="entry_fee_en" name="entry_fee_en" value={formData.entry_fee_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="tour_guide_availability_en">Tour Guide Availability (English)</Label><Input id="tour_guide_availability_en" name="tour_guide_availability_en" value={formData.tour_guide_availability_en} onChange={handleChange} /></div>
-                        <div className="space-y-2 md:col-span-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English, comma-separated)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
-                    </>
-                )}
+              {/* Latitude & Longitude (Re-adding) */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                      <Label htmlFor="latitude">Latitude</Label>
+                      <Input
+                          id="latitude"
+                          name="latitude"
+                          value={formData.latitude}
+                          onChange={handleChange}
+                          placeholder="e.g., 25.2048"
+                          type="number" // Ensure type is number for better input handling
+                          step="any"     // Allow decimals
+                      />
+                  </div>
+                  <div className="space-y-2">
+                      <Label htmlFor="longitude">Longitude</Label>
+                      <Input
+                          id="longitude"
+                          name="longitude"
+                          value={formData.longitude}
+                          onChange={handleChange}
+                          placeholder="e.g., 55.2708"
+                          type="number" // Ensure type is number
+                          step="any"     // Allow decimals
+                      />
+                  </div>
+              </div>
 
-                {/* === Park/Nature Specific Fields === */}
-                {formData.listing_type === 'Park/Nature' && (
-                    <>
-                        <div className="space-y-2"><Label htmlFor="activities_en">Activities (English, comma-separated)</Label><Input id="activities_en" name="activities_en" value={formData.activities_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English, comma-separated)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
-                        <div className="space-y-2 md:col-span-2"><Label htmlFor="safety_tips_en">Safety Tips (English)</Label><Textarea id="safety_tips_en" name="safety_tips_en" value={formData.safety_tips_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="entry_fee_en">Entry Fee (English)</Label><Input id="entry_fee_en" name="entry_fee_en" value={formData.entry_fee_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
-                    </>
-                )}
+              {/* Map Preview */} 
+              {(parsedLatitude !== null && parsedLongitude !== null) && (
+                  <div className="space-y-2 mt-4">
+                       <Label>Map Preview</Label>
+                       <MapDisplay 
+                           latitude={parsedLatitude}
+                           longitude={parsedLongitude}
+                       />
+                  </div>
+              )}
+          </CardContent>
+      </Card>
+      {/* ---------------------------------------- */}
 
-                {/* === Experience Specific Fields === */}
-                {formData.listing_type === 'Experience' && (
-                    <>
-                        <div className="space-y-2"><Label htmlFor="duration_en">Duration (English)</Label><Input id="duration_en" name="duration_en" value={formData.duration_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="highlights_en">Highlights (English, comma-separated)</Label><Input id="highlights_en" name="highlights_en" value={formData.highlights_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="price_range_en">Price Range (English)</Label><Input id="price_range_en" name="price_range_en" value={formData.price_range_en} onChange={handleChange} /></div>
-                        <div className="space-y-2 md:col-span-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
-                        <div className="space-y-2 md:col-span-2"><Label htmlFor="safety_tips_en">Safety Tips (English)</Label><Textarea id="safety_tips_en" name="safety_tips_en" value={formData.safety_tips_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
-                    </>
-                )}
-
-                {/* === Museum Specific Fields === */}
-                {formData.listing_type === 'Museum' && (
-                    <>
-                        <div className="space-y-2"><Label htmlFor="entry_fee_en">Entry Fee (English)</Label><Input id="entry_fee_en" name="entry_fee_en" value={formData.entry_fee_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="tour_guide_availability_en">Tour Guide Availability (English)</Label><Input id="tour_guide_availability_en" name="tour_guide_availability_en" value={formData.tour_guide_availability_en} onChange={handleChange} /></div>
-                        <div className="space-y-2 md:col-span-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English, comma-separated)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="highlights_en">Highlights (English, comma-separated)</Label><Input id="highlights_en" name="highlights_en" value={formData.highlights_en} onChange={handleChange} /></div>
-                    </>
-                )}
-
-                {/* === Religious Site Specific Fields === */}
-                {formData.listing_type === 'Religious Site' && (
-                    <>
-                        <div className="space-y-2 md:col-span-2"><Label htmlFor="religious_significance_en">Religious Significance (English)</Label><Textarea id="religious_significance_en" name="religious_significance_en" value={formData.religious_significance_en} onChange={handleChange} /></div>
-                        <div className="space-y-2 md:col-span-2"><Label htmlFor="entry_rules_en">Entry Rules (English)</Label><Textarea id="entry_rules_en" name="entry_rules_en" value={formData.entry_rules_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
-                        <div className="space-y-2 md:col-span-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English, comma-separated)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
-                    </>
-                )}
-
-                {/* Entry Rules EN */}
-             </CardContent>
-          </Card>
-
-          {/* --- Arabic Content Card --- */}
-          <Card>
-            <CardHeader><CardTitle>Arabic Content</CardTitle></CardHeader>
-             {/* Changed inner grid to single column */}
-             <CardContent className="grid grid-cols-1 gap-6">
-                 {/* === Always Shown Fields === */}
-                 <div className="space-y-2"><Label htmlFor="name_ar">Name (Arabic) *</Label><Input dir="rtl" id="name_ar" name="name_ar" value={formData.name_ar} onChange={handleChange} required /></div>
-                 <div className="space-y-2"><Label htmlFor="slug_ar">Slug (Arabic)</Label><Input dir="rtl" id="slug_ar" name="slug_ar" value={formData.slug_ar} onChange={handleChange} /></div>
-                 <div className="space-y-2 md:col-span-2"><Label htmlFor="description_ar">Description (Arabic)</Label><Textarea dir="rtl" id="description_ar" name="description_ar" value={formData.description_ar} onChange={handleChange} /></div>
-                 <div className="space-y-2"><Label htmlFor="opening_hours_ar">Opening Hours (Arabic)</Label><Input dir="rtl" id="opening_hours_ar" name="opening_hours_ar" value={formData.opening_hours_ar} onChange={handleChange} /></div>
-
-                {/* === Shop/Mall Specific Fields === */}
-                {formData.listing_type === 'Shop/Mall' && (
-                    <>
-                        <div className="space-y-2"><Label htmlFor="popular_stores_ar">Popular Stores (Arabic, comma-separated)</Label><Input dir="rtl" id="popular_stores_ar" name="popular_stores_ar" value={formData.popular_stores_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="entertainment_ar">Entertainment (Arabic, comma-separated)</Label><Input dir="rtl" id="entertainment_ar" name="entertainment_ar" value={formData.entertainment_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="dining_options_ar">Dining Options (Arabic, comma-separated)</Label><Input dir="rtl" id="dining_options_ar" name="dining_options_ar" value={formData.dining_options_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="special_services_ar">Special Services (Arabic, comma-separated)</Label><Input dir="rtl" id="special_services_ar" name="special_services_ar" value={formData.special_services_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
-                    </>
-                )}
-
-                {/* === Restaurant/Café Specific Fields === */}
-                {formData.listing_type === 'Restaurant/Café' && (
-                    <>
-                        <div className="space-y-2"><Label htmlFor="cuisine_type_ar">Cuisine Type (Arabic)</Label><Input dir="rtl" id="cuisine_type_ar" name="cuisine_type_ar" value={formData.cuisine_type_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2 md:col-span-2"><Label htmlFor="story_behind_ar">Story Behind (Arabic)</Label><Textarea dir="rtl" id="story_behind_ar" name="story_behind_ar" value={formData.story_behind_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="menu_highlights_ar">Menu Highlights (Arabic, comma-separated)</Label><Input dir="rtl" id="menu_highlights_ar" name="menu_highlights_ar" value={formData.menu_highlights_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="price_range_ar">Price Range (Arabic)</Label><Input dir="rtl" id="price_range_ar" name="price_range_ar" value={formData.price_range_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="dietary_options_ar">Dietary Options (Arabic, comma-separated)</Label><Input dir="rtl" id="dietary_options_ar" name="dietary_options_ar" value={formData.dietary_options_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="reservation_info_ar">Reservation Info (Arabic)</Label><Input dir="rtl" id="reservation_info_ar" name="reservation_info_ar" value={formData.reservation_info_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="seating_options_ar">Seating Options (Arabic, comma-separated)</Label><Input dir="rtl" id="seating_options_ar" name="seating_options_ar" value={formData.seating_options_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="special_features_ar">Special Features (Arabic, comma-separated)</Label><Input dir="rtl" id="special_features_ar" name="special_features_ar" value={formData.special_features_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
-                    </>
-                )}
-
-                {/* === Historical Site Specific Fields === */}
-                {formData.listing_type === 'Historical Site' && (
-                    <>
-                        <div className="space-y-2 md:col-span-2"><Label htmlFor="historical_significance_ar">Historical Significance (Arabic)</Label><Textarea dir="rtl" id="historical_significance_ar" name="historical_significance_ar" value={formData.historical_significance_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="entry_fee_ar">Entry Fee (Arabic)</Label><Input dir="rtl" id="entry_fee_ar" name="entry_fee_ar" value={formData.entry_fee_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="tour_guide_availability_ar">Tour Guide Availability (Arabic)</Label><Input dir="rtl" id="tour_guide_availability_ar" name="tour_guide_availability_ar" value={formData.tour_guide_availability_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2 md:col-span-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic, comma-separated)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
-                    </>
-                )}
-
-                {/* === Park/Nature Specific Fields === */}
-                {formData.listing_type === 'Park/Nature' && (
-                    <>
-                        <div className="space-y-2"><Label htmlFor="activities_ar">Activities (Arabic, comma-separated)</Label><Input dir="rtl" id="activities_ar" name="activities_ar" value={formData.activities_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic, comma-separated)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2 md:col-span-2"><Label htmlFor="safety_tips_ar">Safety Tips (Arabic)</Label><Textarea dir="rtl" id="safety_tips_ar" name="safety_tips_ar" value={formData.safety_tips_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="entry_fee_ar">Entry Fee (Arabic)</Label><Input dir="rtl" id="entry_fee_ar" name="entry_fee_ar" value={formData.entry_fee_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
-                    </>
-                )}
-
-                {/* === Experience Specific Fields === */}
-                {formData.listing_type === 'Experience' && (
-                    <>
-                        <div className="space-y-2"><Label htmlFor="duration_ar">Duration (Arabic)</Label><Input dir="rtl" id="duration_ar" name="duration_ar" value={formData.duration_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="highlights_ar">Highlights (Arabic, comma-separated)</Label><Input dir="rtl" id="highlights_ar" name="highlights_ar" value={formData.highlights_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="price_range_ar">Price Range (Arabic)</Label><Input dir="rtl" id="price_range_ar" name="price_range_ar" value={formData.price_range_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2 md:col-span-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2 md:col-span-2"><Label htmlFor="safety_tips_ar">Safety Tips (Arabic)</Label><Textarea dir="rtl" id="safety_tips_ar" name="safety_tips_ar" value={formData.safety_tips_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
-                    </>
-                )}
-
-                {/* === Museum Specific Fields === */}
-                {formData.listing_type === 'Museum' && (
-                    <>
-                        <div className="space-y-2"><Label htmlFor="entry_fee_ar">Entry Fee (Arabic)</Label><Input dir="rtl" id="entry_fee_ar" name="entry_fee_ar" value={formData.entry_fee_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="tour_guide_availability_ar">Tour Guide Availability (Arabic)</Label><Input dir="rtl" id="tour_guide_availability_ar" name="tour_guide_availability_ar" value={formData.tour_guide_availability_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2 md:col-span-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic, comma-separated)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="highlights_ar">Highlights (Arabic, comma-separated)</Label><Input dir="rtl" id="highlights_ar" name="highlights_ar" value={formData.highlights_ar} onChange={handleChange} /></div>
-                    </>
-                )}
-
-                {/* === Religious Site Specific Fields === */}
-                {formData.listing_type === 'Religious Site' && (
-                    <>
-                        <div className="space-y-2 md:col-span-2"><Label htmlFor="religious_significance_ar">Religious Significance (Arabic)</Label><Textarea dir="rtl" id="religious_significance_ar" name="religious_significance_ar" value={formData.religious_significance_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2 md:col-span-2"><Label htmlFor="entry_rules_ar">Entry Rules (Arabic)</Label><Textarea dir="rtl" id="entry_rules_ar" name="entry_rules_ar" value={formData.entry_rules_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2 md:col-span-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic, comma-separated)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
-                        <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
-                    </>
-                )}
-             </CardContent>
-          </Card>
-      </div>
-
-      {/* --- Categories Card --- */}
+      {/* Categories Card (Existing) */}
       <Card>
         <CardHeader><CardTitle>Categories</CardTitle></CardHeader>
          <CardContent>
@@ -932,8 +926,278 @@ export function NewListingForm() {
          </CardContent>
       </Card>
 
-      {/* --- Submit Buttons --- */}
-      <div className="flex justify-end gap-4">
+      {/* --- Curated Collections Card (Same as EditForm) --- */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Curated Collections</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {collectionsLoading ? (
+             <div className="flex justify-center items-center p-4"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+          ) : availableCollections.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No collections available.</p>
+          ) : (
+            availableCollections.map((collection) => (
+              <div key={collection.id} className="flex items-center justify-between gap-4 rounded-md border p-3">
+                <div className="flex items-center gap-3">
+                   <Checkbox
+                    id={`collection-${collection.id}`}
+                    checked={collectionSelections[collection.id]?.selected || false}
+                    onCheckedChange={(checked) => handleCollectionChange(collection.id, !!checked)}
+                  />
+                  <Label htmlFor={`collection-${collection.id}`} className="cursor-pointer">
+                    {collection.name_en}
+                  </Label>
+                </div>
+                {collectionSelections[collection.id]?.selected && (
+                   <div className="flex items-center gap-2">
+                       <Label htmlFor={`feature-${collection.id}`} className="text-sm text-muted-foreground">
+                         Feature on Home
+                       </Label>
+                       <Switch
+                           id={`feature-${collection.id}`}
+                           checked={collectionSelections[collection.id]?.featured || false}
+                           onCheckedChange={(checked) => handleFeatureChange(collection.id, checked)}
+                       />
+                   </div>
+                )}
+              </div>
+            ))
+          )}
+        </CardContent>
+      </Card>
+
+      {/* --- NEW: Side-by-Side Language Content --- */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* --- English Content Card --- */}
+          <Card>
+              <CardHeader><CardTitle>English Content</CardTitle></CardHeader>
+              <CardContent className="grid grid-cols-1 gap-6">
+                  {/* === Always Shown Fields (EN) === */}
+                  <div className="space-y-2">
+                      <Label htmlFor="name_en">Name (English) *</Label>
+                      <Input id="name_en" name="name_en" value={formData.name_en} onChange={handleChange} required />
+                  </div>
+                  <div className="space-y-2">
+                      <Label htmlFor="slug_en">Slug (English)</Label>
+                      <Input id="slug_en" name="slug_en" value={formData.slug_en} onChange={handleChange} />
+                  </div>
+                  <div className="space-y-2">
+                      <Label htmlFor="description_en">Description (English)</Label>
+                      <Textarea id="description_en" name="description_en" value={formData.description_en} onChange={handleChange} />
+                  </div>
+                  <div className="space-y-2">
+                      <Label htmlFor="opening_hours_en">Opening Hours (English)</Label>
+                      <Input id="opening_hours_en" name="opening_hours_en" value={formData.opening_hours_en} onChange={handleChange} />
+                  </div>
+
+                  {/* === Shop/Mall Specific Fields (EN) === */}
+                  {formData.listing_type === 'Shop/Mall' && (
+                      <>
+                         <div className="space-y-2"><Label htmlFor="popular_stores_en">Popular Stores (English, comma-separated)</Label><Input id="popular_stores_en" name="popular_stores_en" value={formData.popular_stores_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="entertainment_en">Entertainment (English, comma-separated)</Label><Input id="entertainment_en" name="entertainment_en" value={formData.entertainment_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="dining_options_en">Dining Options (English, comma-separated)</Label><Input id="dining_options_en" name="dining_options_en" value={formData.dining_options_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="special_services_en">Special Services (English, comma-separated)</Label><Input id="special_services_en" name="special_services_en" value={formData.special_services_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
+                     </>
+                  )}
+
+                  {/* === Restaurant/Café Specific Fields (EN) === */}
+                  {formData.listing_type === 'Restaurant/Café' && (
+                     <>
+                         <div className="space-y-2"><Label htmlFor="cuisine_type_en">Cuisine Type (English)</Label><Input id="cuisine_type_en" name="cuisine_type_en" value={formData.cuisine_type_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="story_behind_en">Story Behind (English)</Label><Textarea id="story_behind_en" name="story_behind_en" value={formData.story_behind_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="menu_highlights_en">Menu Highlights (English, comma-separated)</Label><Input id="menu_highlights_en" name="menu_highlights_en" value={formData.menu_highlights_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="price_range_en">Price Range (English)</Label><Input id="price_range_en" name="price_range_en" value={formData.price_range_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="dietary_options_en">Dietary Options (English, comma-separated)</Label><Input id="dietary_options_en" name="dietary_options_en" value={formData.dietary_options_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="reservation_info_en">Reservation Info (English)</Label><Input id="reservation_info_en" name="reservation_info_en" value={formData.reservation_info_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="seating_options_en">Seating Options (English, comma-separated)</Label><Input id="seating_options_en" name="seating_options_en" value={formData.seating_options_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="special_features_en">Special Features (English, comma-separated)</Label><Input id="special_features_en" name="special_features_en" value={formData.special_features_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                     </>
+                 )}
+
+                 {/* === Historical Site Specific Fields (EN) === */}
+                 {formData.listing_type === 'Historical Site' && (
+                     <>
+                         <div className="space-y-2"><Label htmlFor="historical_significance_en">Historical Significance (English)</Label><Textarea id="historical_significance_en" name="historical_significance_en" value={formData.historical_significance_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="entry_fee_en">Entry Fee (English)</Label><Input id="entry_fee_en" name="entry_fee_en" value={formData.entry_fee_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="tour_guide_availability_en">Tour Guide Availability (English)</Label><Input id="tour_guide_availability_en" name="tour_guide_availability_en" value={formData.tour_guide_availability_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English, comma-separated)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
+                     </>
+                 )}
+
+                 {/* === Park/Nature Specific Fields (EN) === */}
+                 {formData.listing_type === 'Park/Nature' && (
+                     <>
+                         <div className="space-y-2"><Label htmlFor="activities_en">Activities (English, comma-separated)</Label><Input id="activities_en" name="activities_en" value={formData.activities_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English, comma-separated)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="safety_tips_en">Safety Tips (English)</Label><Textarea id="safety_tips_en" name="safety_tips_en" value={formData.safety_tips_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="entry_fee_en">Entry Fee (English)</Label><Input id="entry_fee_en" name="entry_fee_en" value={formData.entry_fee_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
+                     </>
+                 )}
+
+                 {/* === Experience Specific Fields (EN) === */}
+                 {formData.listing_type === 'Experience' && (
+                     <>
+                         <div className="space-y-2"><Label htmlFor="duration_en">Duration (English)</Label><Input id="duration_en" name="duration_en" value={formData.duration_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="highlights_en">Highlights (English, comma-separated)</Label><Input id="highlights_en" name="highlights_en" value={formData.highlights_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="price_range_en">Price Range (English)</Label><Input id="price_range_en" name="price_range_en" value={formData.price_range_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="safety_tips_en">Safety Tips (English)</Label><Textarea id="safety_tips_en" name="safety_tips_en" value={formData.safety_tips_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
+                     </>
+                 )}
+
+                 {/* === Museum Specific Fields (EN) === */}
+                 {formData.listing_type === 'Museum' && (
+                     <>
+                         <div className="space-y-2"><Label htmlFor="entry_fee_en">Entry Fee (English)</Label><Input id="entry_fee_en" name="entry_fee_en" value={formData.entry_fee_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="tour_guide_availability_en">Tour Guide Availability (English)</Label><Input id="tour_guide_availability_en" name="tour_guide_availability_en" value={formData.tour_guide_availability_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English, comma-separated)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="highlights_en">Highlights (English, comma-separated)</Label><Input id="highlights_en" name="highlights_en" value={formData.highlights_en} onChange={handleChange} /></div>
+                     </>
+                 )}
+
+                 {/* === Religious Site Specific Fields (EN) === */}
+                 {formData.listing_type === 'Religious Site' && (
+                     <>
+                         <div className="space-y-2"><Label htmlFor="religious_significance_en">Religious Significance (English)</Label><Textarea id="religious_significance_en" name="religious_significance_en" value={formData.religious_significance_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="entry_rules_en">Entry Rules (English)</Label><Textarea id="entry_rules_en" name="entry_rules_en" value={formData.entry_rules_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English, comma-separated)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
+                     </>
+                 )}
+              </CardContent>
+          </Card>
+
+          {/* --- Arabic Content Card --- */}
+          <Card>
+              <CardHeader><CardTitle>Arabic Content</CardTitle></CardHeader>
+              <CardContent className="grid grid-cols-1 gap-6">
+                  {/* === Always Shown Fields (AR) === */}
+                  <div className="space-y-2"><Label htmlFor="name_ar">Name (Arabic) *</Label><Input dir="rtl" id="name_ar" name="name_ar" value={formData.name_ar} onChange={handleChange} required /></div>
+                  <div className="space-y-2"><Label htmlFor="slug_ar">Slug (Arabic)</Label><Input dir="rtl" id="slug_ar" name="slug_ar" value={formData.slug_ar} onChange={handleChange} /></div>
+                  <div className="space-y-2"><Label htmlFor="description_ar">Description (Arabic)</Label><Textarea dir="rtl" id="description_ar" name="description_ar" value={formData.description_ar} onChange={handleChange} /></div>
+                  <div className="space-y-2"><Label htmlFor="opening_hours_ar">Opening Hours (Arabic)</Label><Input dir="rtl" id="opening_hours_ar" name="opening_hours_ar" value={formData.opening_hours_ar} onChange={handleChange} /></div>
+
+                  {/* === Shop/Mall Specific Fields (AR) === */}
+                  {formData.listing_type === 'Shop/Mall' && (
+                      <>
+                         <div className="space-y-2"><Label htmlFor="popular_stores_ar">Popular Stores (Arabic, comma-separated)</Label><Input dir="rtl" id="popular_stores_ar" name="popular_stores_ar" value={formData.popular_stores_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="entertainment_ar">Entertainment (Arabic, comma-separated)</Label><Input dir="rtl" id="entertainment_ar" name="entertainment_ar" value={formData.entertainment_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="dining_options_ar">Dining Options (Arabic, comma-separated)</Label><Input dir="rtl" id="dining_options_ar" name="dining_options_ar" value={formData.dining_options_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="special_services_ar">Special Services (Arabic, comma-separated)</Label><Input dir="rtl" id="special_services_ar" name="special_services_ar" value={formData.special_services_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
+                      </>
+                  )}
+
+                  {/* === Restaurant/Café Specific Fields (AR) === */}
+                  {formData.listing_type === 'Restaurant/Café' && (
+                     <>
+                         <div className="space-y-2"><Label htmlFor="cuisine_type_ar">Cuisine Type (Arabic)</Label><Input dir="rtl" id="cuisine_type_ar" name="cuisine_type_ar" value={formData.cuisine_type_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="story_behind_ar">Story Behind (Arabic)</Label><Textarea dir="rtl" id="story_behind_ar" name="story_behind_ar" value={formData.story_behind_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="menu_highlights_ar">Menu Highlights (Arabic, comma-separated)</Label><Input dir="rtl" id="menu_highlights_ar" name="menu_highlights_ar" value={formData.menu_highlights_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="price_range_ar">Price Range (Arabic)</Label><Input dir="rtl" id="price_range_ar" name="price_range_ar" value={formData.price_range_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="dietary_options_ar">Dietary Options (Arabic, comma-separated)</Label><Input dir="rtl" id="dietary_options_ar" name="dietary_options_ar" value={formData.dietary_options_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="reservation_info_ar">Reservation Info (Arabic)</Label><Input dir="rtl" id="reservation_info_ar" name="reservation_info_ar" value={formData.reservation_info_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="seating_options_ar">Seating Options (Arabic, comma-separated)</Label><Input dir="rtl" id="seating_options_ar" name="seating_options_ar" value={formData.seating_options_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="special_features_ar">Special Features (Arabic, comma-separated)</Label><Input dir="rtl" id="special_features_ar" name="special_features_ar" value={formData.special_features_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                     </>
+                 )}
+
+                 {/* === Historical Site Specific Fields (AR) === */}
+                 {formData.listing_type === 'Historical Site' && (
+                     <>
+                         <div className="space-y-2"><Label htmlFor="historical_significance_ar">Historical Significance (Arabic)</Label><Textarea dir="rtl" id="historical_significance_ar" name="historical_significance_ar" value={formData.historical_significance_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="entry_fee_ar">Entry Fee (Arabic)</Label><Input dir="rtl" id="entry_fee_ar" name="entry_fee_ar" value={formData.entry_fee_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="tour_guide_availability_ar">Tour Guide Availability (Arabic)</Label><Input dir="rtl" id="tour_guide_availability_ar" name="tour_guide_availability_ar" value={formData.tour_guide_availability_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic, comma-separated)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
+                     </>
+                 )}
+
+                 {/* === Park/Nature Specific Fields (AR) === */}
+                 {formData.listing_type === 'Park/Nature' && (
+                     <>
+                         <div className="space-y-2"><Label htmlFor="activities_ar">Activities (Arabic, comma-separated)</Label><Input dir="rtl" id="activities_ar" name="activities_ar" value={formData.activities_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic, comma-separated)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="safety_tips_ar">Safety Tips (Arabic)</Label><Textarea dir="rtl" id="safety_tips_ar" name="safety_tips_ar" value={formData.safety_tips_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="entry_fee_ar">Entry Fee (Arabic)</Label><Input dir="rtl" id="entry_fee_ar" name="entry_fee_ar" value={formData.entry_fee_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
+                     </>
+                 )}
+
+                 {/* === Experience Specific Fields (AR) === */}
+                 {formData.listing_type === 'Experience' && (
+                     <>
+                         <div className="space-y-2"><Label htmlFor="duration_ar">Duration (Arabic)</Label><Input dir="rtl" id="duration_ar" name="duration_ar" value={formData.duration_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="highlights_ar">Highlights (Arabic, comma-separated)</Label><Input dir="rtl" id="highlights_ar" name="highlights_ar" value={formData.highlights_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="price_range_ar">Price Range (Arabic)</Label><Input dir="rtl" id="price_range_ar" name="price_range_ar" value={formData.price_range_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="safety_tips_ar">Safety Tips (Arabic)</Label><Textarea dir="rtl" id="safety_tips_ar" name="safety_tips_ar" value={formData.safety_tips_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
+                     </>
+                 )}
+
+                 {/* === Museum Specific Fields (AR) === */}
+                 {formData.listing_type === 'Museum' && (
+                     <>
+                         <div className="space-y-2"><Label htmlFor="entry_fee_ar">Entry Fee (Arabic)</Label><Input dir="rtl" id="entry_fee_ar" name="entry_fee_ar" value={formData.entry_fee_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="tour_guide_availability_ar">Tour Guide Availability (Arabic)</Label><Input dir="rtl" id="tour_guide_availability_ar" name="tour_guide_availability_ar" value={formData.tour_guide_availability_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic, comma-separated)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="highlights_ar">Highlights (Arabic, comma-separated)</Label><Input dir="rtl" id="highlights_ar" name="highlights_ar" value={formData.highlights_ar} onChange={handleChange} /></div>
+                     </>
+                 )}
+
+                 {/* === Religious Site Specific Fields (AR) === */}
+                 {formData.listing_type === 'Religious Site' && (
+                     <>
+                         <div className="space-y-2"><Label htmlFor="religious_significance_ar">Religious Significance (Arabic)</Label><Textarea dir="rtl" id="religious_significance_ar" name="religious_significance_ar" value={formData.religious_significance_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="entry_rules_ar">Entry Rules (Arabic)</Label><Textarea dir="rtl" id="entry_rules_ar" name="entry_rules_ar" value={formData.entry_rules_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic, comma-separated)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
+                     </>
+                 )}
+              </CardContent>
+          </Card>
+      </div> { /* End Side-by-Side Language Content */ }
+
+      {/* Submit Buttons */}
+      <div className="flex justify-end gap-3 mt-8">
         <Link href="/dashboard/listings">
           <Button type="button" variant="outline" disabled={saving}>Cancel</Button>
         </Link>
