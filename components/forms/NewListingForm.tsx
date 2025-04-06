@@ -132,7 +132,6 @@ export function NewListingForm() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [saving, setSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [displayCategories, setDisplayCategories] = useState<DisplayCategory[]>([]);
   const [isFetchingLocation, setIsFetchingLocation] = useState(false);
   const [slugEnManuallySet, setSlugEnManuallySet] = useState(false);
   const [slugArManuallySet, setSlugArManuallySet] = useState(false);
@@ -232,9 +231,12 @@ export function NewListingForm() {
   // Hook for category translations (NEW)
   const { data: allCategoryTranslations, status: categoryTranslationsStatus } = useSupabaseTable('category_translations');
 
-  // Effect to combine categories and translations (NEW)
+  // REMOVE THIS OLD useEffect block (lines 237-254)
+  /*
   useEffect(() => {
-      if (baseCategories && allCategoryTranslations) {
+      // Only process if both baseCategories exist and translations have successfully loaded
+      if (baseCategories && categoryTranslationsStatus === 'success' && allCategoryTranslations) {
+          console.log("[NewListingForm] Combining categories and translations...");
           const combined = baseCategories.map(cat => {
               const en = allCategoryTranslations.find(t => t.category_id === cat.id && t.language_code === 'en');
               const ar = allCategoryTranslations.find(t => t.category_id === cat.id && t.language_code === 'ar');
@@ -247,9 +249,31 @@ export function NewListingForm() {
           });
           // Sort if needed
           combined.sort((a, b) => (a.name_en ?? '').localeCompare(b.name_en ?? ''));
-          setDisplayCategories(combined);
+          // setDisplayCategories(combined); // This caused the error
+          console.log("[NewListingForm] Combined categories set.");
       }
-  }, [baseCategories, allCategoryTranslations]);
+  }, [baseCategories, categoryTranslationsStatus]); // Depend on status and base categories only
+  */
+  
+  // --- ADD BACK: Memoize the combined categories ---
+  const combinedDisplayCategories = useMemo(() => {
+    if (baseCategories && categoryTranslationsStatus === 'success' && allCategoryTranslations) {
+        console.log("[NewListingForm] Memoizing combined categories...");
+        const combined = baseCategories.map(cat => {
+            const en = allCategoryTranslations.find(t => t.category_id === cat.id && t.language_code === 'en');
+            const ar = allCategoryTranslations.find(t => t.category_id === cat.id && t.language_code === 'ar');
+            return {
+                ...cat,
+                name_en: en?.name,
+                name_ar: ar?.name,
+            } as DisplayCategory;
+        });
+        combined.sort((a, b) => (a.name_en ?? '').localeCompare(b.name_en ?? ''));
+        console.log("[NewListingForm] Combined categories memoized.");
+        return combined;
+    }
+    return []; // Return empty array if data not ready
+  }, [baseCategories, categoryTranslationsStatus, allCategoryTranslations]);
 
   // Combine loading states for categories (NEW)
   const categoriesCombinedLoading = categoriesLoading || categoryTranslationsStatus !== 'success';
@@ -366,16 +390,15 @@ export function NewListingForm() {
   }, [imagePreviews]);
   // -----------------------------------------
 
-  const handleCategoryChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { value, checked } = e.target;
-    
+  // --- Refactored Category Change Handler ---
+  const handleCategoryChange = (categoryId: string, checked: boolean) => {
     setFormData(prev => {
       let newCategoryIds = [...prev.categoryIds];
       
-      if (checked && !newCategoryIds.includes(value)) {
-        newCategoryIds.push(value);
-      } else if (!checked && newCategoryIds.includes(value)) {
-        newCategoryIds = newCategoryIds.filter(catId => catId !== value);
+      if (checked && !newCategoryIds.includes(categoryId)) {
+        newCategoryIds.push(categoryId);
+      } else if (!checked && newCategoryIds.includes(categoryId)) {
+        newCategoryIds = newCategoryIds.filter(catId => catId !== categoryId);
       }
       
       return {
@@ -696,7 +719,7 @@ export function NewListingForm() {
                 <Select 
                     name="listing_type" 
                     onValueChange={(value) => setFormData(prev => ({ ...prev, listing_type: value }))} // Simplified state update
-                    value={formData.listing_type} 
+                    value={formData.listing_type} // Re-enabled value prop
                 >
                     <SelectTrigger id="listing_type">
                         <SelectValue placeholder="Select Listing Type" />
@@ -713,11 +736,14 @@ export function NewListingForm() {
                 </Select>
              </div>
              
-             {/* Location Name EN */}
+             {/* REMOVED Location Name EN input */}
+            {/* 
              <div className="space-y-2">
-                <Label htmlFor="name_en">Location Name (English) *</Label>
+                <Label htmlFor="name_en">Location Name (English) *</Label> 
                 <Input id="name_en" name="name_en" value={formData.name_en} onChange={handleChange} placeholder="e.g., Central Park Mall" required />
-             </div>
+             </div> 
+            */}
+
          </CardContent>
       </Card>
       
@@ -901,15 +927,14 @@ export function NewListingForm() {
          <CardContent>
              {categoriesCombinedLoading ? (
                  <p>Loading categories...</p>
-             ) : displayCategories.length > 0 ? (
+             ) : combinedDisplayCategories.length > 0 ? (
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                    {displayCategories.map(category => (
+                    {combinedDisplayCategories.map(category => (
                         <div key={category.id} className="flex items-center space-x-2">
                             <Checkbox 
                                 id={`category-${category.id}`}
-                                value={category.id}
                                 checked={formData.categoryIds.includes(category.id)}
-                                onCheckedChange={(checked: boolean) => handleCategoryChange({ target: { value: category.id, checked } } as any)}
+                                onCheckedChange={(checked: boolean) => handleCategoryChange(category.id, checked)}
                             />
                             <label
                                 htmlFor={`category-${category.id}`}
@@ -994,11 +1019,11 @@ export function NewListingForm() {
                   {/* === Shop/Mall Specific Fields (EN) === */}
                   {formData.listing_type === 'Shop/Mall' && (
                       <>
-                         <div className="space-y-2"><Label htmlFor="popular_stores_en">Popular Stores (English, comma-separated)</Label><Input id="popular_stores_en" name="popular_stores_en" value={formData.popular_stores_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="entertainment_en">Entertainment (English, comma-separated)</Label><Input id="entertainment_en" name="entertainment_en" value={formData.entertainment_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="dining_options_en">Dining Options (English, comma-separated)</Label><Input id="dining_options_en" name="dining_options_en" value={formData.dining_options_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="special_services_en">Special Services (English, comma-separated)</Label><Input id="special_services_en" name="special_services_en" value={formData.special_services_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="popular_stores_en">Popular Stores (English)</Label><Input id="popular_stores_en" name="popular_stores_en" value={formData.popular_stores_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="entertainment_en">Entertainment (English)</Label><Input id="entertainment_en" name="entertainment_en" value={formData.entertainment_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="dining_options_en">Dining Options (English)</Label><Input id="dining_options_en" name="dining_options_en" value={formData.dining_options_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="special_services_en">Special Services (English)</Label><Input id="special_services_en" name="special_services_en" value={formData.special_services_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
                      </>
                   )}
@@ -1008,14 +1033,14 @@ export function NewListingForm() {
                      <>
                          <div className="space-y-2"><Label htmlFor="cuisine_type_en">Cuisine Type (English)</Label><Input id="cuisine_type_en" name="cuisine_type_en" value={formData.cuisine_type_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="story_behind_en">Story Behind (English)</Label><Textarea id="story_behind_en" name="story_behind_en" value={formData.story_behind_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="menu_highlights_en">Menu Highlights (English, comma-separated)</Label><Input id="menu_highlights_en" name="menu_highlights_en" value={formData.menu_highlights_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="menu_highlights_en">Menu Highlights (English)</Label><Input id="menu_highlights_en" name="menu_highlights_en" value={formData.menu_highlights_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="price_range_en">Price Range (English)</Label><Input id="price_range_en" name="price_range_en" value={formData.price_range_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="dietary_options_en">Dietary Options (English, comma-separated)</Label><Input id="dietary_options_en" name="dietary_options_en" value={formData.dietary_options_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="dietary_options_en">Dietary Options (English)</Label><Input id="dietary_options_en" name="dietary_options_en" value={formData.dietary_options_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="reservation_info_en">Reservation Info (English)</Label><Input id="reservation_info_en" name="reservation_info_en" value={formData.reservation_info_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="seating_options_en">Seating Options (English, comma-separated)</Label><Input id="seating_options_en" name="seating_options_en" value={formData.seating_options_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="special_features_en">Special Features (English, comma-separated)</Label><Input id="special_features_en" name="special_features_en" value={formData.special_features_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="seating_options_en">Seating Options (English)</Label><Input id="seating_options_en" name="seating_options_en" value={formData.seating_options_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="special_features_en">Special Features (English)</Label><Input id="special_features_en" name="special_features_en" value={formData.special_features_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
                      </>
                  )}
 
@@ -1027,8 +1052,8 @@ export function NewListingForm() {
                          <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="tour_guide_availability_en">Tour Guide Availability (English)</Label><Input id="tour_guide_availability_en" name="tour_guide_availability_en" value={formData.tour_guide_availability_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English, comma-separated)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
                      </>
                  )}
@@ -1036,12 +1061,12 @@ export function NewListingForm() {
                  {/* === Park/Nature Specific Fields (EN) === */}
                  {formData.listing_type === 'Park/Nature' && (
                      <>
-                         <div className="space-y-2"><Label htmlFor="activities_en">Activities (English, comma-separated)</Label><Input id="activities_en" name="activities_en" value={formData.activities_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English, comma-separated)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="activities_en">Activities (English)</Label><Input id="activities_en" name="activities_en" value={formData.activities_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="safety_tips_en">Safety Tips (English)</Label><Textarea id="safety_tips_en" name="safety_tips_en" value={formData.safety_tips_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="entry_fee_en">Entry Fee (English)</Label><Input id="entry_fee_en" name="entry_fee_en" value={formData.entry_fee_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
                      </>
                  )}
@@ -1050,11 +1075,11 @@ export function NewListingForm() {
                  {formData.listing_type === 'Experience' && (
                      <>
                          <div className="space-y-2"><Label htmlFor="duration_en">Duration (English)</Label><Input id="duration_en" name="duration_en" value={formData.duration_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="highlights_en">Highlights (English, comma-separated)</Label><Input id="highlights_en" name="highlights_en" value={formData.highlights_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="highlights_en">Highlights (English)</Label><Input id="highlights_en" name="highlights_en" value={formData.highlights_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="price_range_en">Price Range (English)</Label><Input id="price_range_en" name="price_range_en" value={formData.price_range_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="safety_tips_en">Safety Tips (English)</Label><Textarea id="safety_tips_en" name="safety_tips_en" value={formData.safety_tips_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
                      </>
                  )}
@@ -1066,10 +1091,10 @@ export function NewListingForm() {
                          <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="tour_guide_availability_en">Tour Guide Availability (English)</Label><Input id="tour_guide_availability_en" name="tour_guide_availability_en" value={formData.tour_guide_availability_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English, comma-separated)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="highlights_en">Highlights (English, comma-separated)</Label><Input id="highlights_en" name="highlights_en" value={formData.highlights_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="highlights_en">Highlights (English)</Label><Input id="highlights_en" name="highlights_en" value={formData.highlights_en} onChange={handleChange} /></div>
                      </>
                  )}
 
@@ -1080,8 +1105,8 @@ export function NewListingForm() {
                          <div className="space-y-2"><Label htmlFor="entry_rules_en">Entry Rules (English)</Label><Textarea id="entry_rules_en" name="entry_rules_en" value={formData.entry_rules_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English, comma-separated)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
                      </>
                  )}
@@ -1101,11 +1126,11 @@ export function NewListingForm() {
                   {/* === Shop/Mall Specific Fields (AR) === */}
                   {formData.listing_type === 'Shop/Mall' && (
                       <>
-                         <div className="space-y-2"><Label htmlFor="popular_stores_ar">Popular Stores (Arabic, comma-separated)</Label><Input dir="rtl" id="popular_stores_ar" name="popular_stores_ar" value={formData.popular_stores_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="entertainment_ar">Entertainment (Arabic, comma-separated)</Label><Input dir="rtl" id="entertainment_ar" name="entertainment_ar" value={formData.entertainment_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="dining_options_ar">Dining Options (Arabic, comma-separated)</Label><Input dir="rtl" id="dining_options_ar" name="dining_options_ar" value={formData.dining_options_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="special_services_ar">Special Services (Arabic, comma-separated)</Label><Input dir="rtl" id="special_services_ar" name="special_services_ar" value={formData.special_services_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="popular_stores_ar">Popular Stores (Arabic)</Label><Input dir="rtl" id="popular_stores_ar" name="popular_stores_ar" value={formData.popular_stores_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="entertainment_ar">Entertainment (Arabic)</Label><Input dir="rtl" id="entertainment_ar" name="entertainment_ar" value={formData.entertainment_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="dining_options_ar">Dining Options (Arabic)</Label><Input dir="rtl" id="dining_options_ar" name="dining_options_ar" value={formData.dining_options_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="special_services_ar">Special Services (Arabic)</Label><Input dir="rtl" id="special_services_ar" name="special_services_ar" value={formData.special_services_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
                       </>
                   )}
@@ -1115,14 +1140,14 @@ export function NewListingForm() {
                      <>
                          <div className="space-y-2"><Label htmlFor="cuisine_type_ar">Cuisine Type (Arabic)</Label><Input dir="rtl" id="cuisine_type_ar" name="cuisine_type_ar" value={formData.cuisine_type_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="story_behind_ar">Story Behind (Arabic)</Label><Textarea dir="rtl" id="story_behind_ar" name="story_behind_ar" value={formData.story_behind_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="menu_highlights_ar">Menu Highlights (Arabic, comma-separated)</Label><Input dir="rtl" id="menu_highlights_ar" name="menu_highlights_ar" value={formData.menu_highlights_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="menu_highlights_ar">Menu Highlights (Arabic)</Label><Input dir="rtl" id="menu_highlights_ar" name="menu_highlights_ar" value={formData.menu_highlights_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="price_range_ar">Price Range (Arabic)</Label><Input dir="rtl" id="price_range_ar" name="price_range_ar" value={formData.price_range_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="dietary_options_ar">Dietary Options (Arabic, comma-separated)</Label><Input dir="rtl" id="dietary_options_ar" name="dietary_options_ar" value={formData.dietary_options_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="dietary_options_ar">Dietary Options (Arabic)</Label><Input dir="rtl" id="dietary_options_ar" name="dietary_options_ar" value={formData.dietary_options_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="reservation_info_ar">Reservation Info (Arabic)</Label><Input dir="rtl" id="reservation_info_ar" name="reservation_info_ar" value={formData.reservation_info_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="seating_options_ar">Seating Options (Arabic, comma-separated)</Label><Input dir="rtl" id="seating_options_ar" name="seating_options_ar" value={formData.seating_options_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="special_features_ar">Special Features (Arabic, comma-separated)</Label><Input dir="rtl" id="special_features_ar" name="special_features_ar" value={formData.special_features_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="seating_options_ar">Seating Options (Arabic)</Label><Input dir="rtl" id="seating_options_ar" name="seating_options_ar" value={formData.seating_options_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="special_features_ar">Special Features (Arabic)</Label><Input dir="rtl" id="special_features_ar" name="special_features_ar" value={formData.special_features_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
                      </>
                  )}
 
@@ -1134,8 +1159,8 @@ export function NewListingForm() {
                          <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="tour_guide_availability_ar">Tour Guide Availability (Arabic)</Label><Input dir="rtl" id="tour_guide_availability_ar" name="tour_guide_availability_ar" value={formData.tour_guide_availability_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic, comma-separated)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
                      </>
                  )}
@@ -1143,12 +1168,12 @@ export function NewListingForm() {
                  {/* === Park/Nature Specific Fields (AR) === */}
                  {formData.listing_type === 'Park/Nature' && (
                      <>
-                         <div className="space-y-2"><Label htmlFor="activities_ar">Activities (Arabic, comma-separated)</Label><Input dir="rtl" id="activities_ar" name="activities_ar" value={formData.activities_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic, comma-separated)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="activities_ar">Activities (Arabic)</Label><Input dir="rtl" id="activities_ar" name="activities_ar" value={formData.activities_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="safety_tips_ar">Safety Tips (Arabic)</Label><Textarea dir="rtl" id="safety_tips_ar" name="safety_tips_ar" value={formData.safety_tips_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="entry_fee_ar">Entry Fee (Arabic)</Label><Input dir="rtl" id="entry_fee_ar" name="entry_fee_ar" value={formData.entry_fee_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
                      </>
                  )}
@@ -1157,11 +1182,11 @@ export function NewListingForm() {
                  {formData.listing_type === 'Experience' && (
                      <>
                          <div className="space-y-2"><Label htmlFor="duration_ar">Duration (Arabic)</Label><Input dir="rtl" id="duration_ar" name="duration_ar" value={formData.duration_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="highlights_ar">Highlights (Arabic, comma-separated)</Label><Input dir="rtl" id="highlights_ar" name="highlights_ar" value={formData.highlights_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="highlights_ar">Highlights (Arabic)</Label><Input dir="rtl" id="highlights_ar" name="highlights_ar" value={formData.highlights_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="price_range_ar">Price Range (Arabic)</Label><Input dir="rtl" id="price_range_ar" name="price_range_ar" value={formData.price_range_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="safety_tips_ar">Safety Tips (Arabic)</Label><Textarea dir="rtl" id="safety_tips_ar" name="safety_tips_ar" value={formData.safety_tips_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
                      </>
                  )}
@@ -1173,10 +1198,10 @@ export function NewListingForm() {
                          <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="tour_guide_availability_ar">Tour Guide Availability (Arabic)</Label><Input dir="rtl" id="tour_guide_availability_ar" name="tour_guide_availability_ar" value={formData.tour_guide_availability_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic, comma-separated)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="highlights_ar">Highlights (Arabic, comma-separated)</Label><Input dir="rtl" id="highlights_ar" name="highlights_ar" value={formData.highlights_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="highlights_ar">Highlights (Arabic)</Label><Input dir="rtl" id="highlights_ar" name="highlights_ar" value={formData.highlights_ar} onChange={handleChange} /></div>
                      </>
                  )}
 
@@ -1187,8 +1212,8 @@ export function NewListingForm() {
                          <div className="space-y-2"><Label htmlFor="entry_rules_ar">Entry Rules (Arabic)</Label><Textarea dir="rtl" id="entry_rules_ar" name="entry_rules_ar" value={formData.entry_rules_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic, comma-separated)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
                      </>
                  )}

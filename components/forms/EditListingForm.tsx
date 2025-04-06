@@ -8,13 +8,15 @@ import {
   AlertCircle,
   MapPin,
   ImagePlus,
+  ArrowLeft,
+  DownloadCloud,
 } from "lucide-react";
 import { useSupabaseRow, useSupabaseTable } from "@/hooks/use-supabase";
 import { ListingImageManager } from "@/components/ListingImageManager";
 import { ListingMedia } from "@/hooks/use-listing-images";
 import { useCategories, Category } from "@/hooks/use-categories";
 import { useAuth } from "@/providers/auth-provider";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
@@ -22,6 +24,9 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { MapDisplay } from "@/components/maps/MapDisplay";
+import { Switch } from "@/components/ui/switch";
+import { createClient } from "@/lib/supabase/client";
+import { Database } from "@/lib/database.types";
 
 // --- NEW Interfaces based on Schema Dump ---
 interface Listing {
@@ -87,6 +92,23 @@ interface ListingCategoryLink {
   category_id: string;
 }
 
+interface CuratedCollection {
+  id: string;
+  name_en: string;
+}
+
+interface CollectionItemLink {
+  collection_id: string;
+  feature_on_home: boolean;
+}
+
+interface CollectionSelectionState {
+  [collectionId: string]: {
+    selected: boolean;
+    featured: boolean;
+  };
+}
+
 interface EditListingFormProps {
   listingId: string;
 }
@@ -115,6 +137,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
   const { supabase, loading: authLoading } = useAuth();
   const [saving, setSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isFetchingLocation, setIsFetchingLocation] = useState(false); // <-- Add this line
   const [translationEn, setTranslationEn] = useState<ListingTranslation | null>(
     null
   );
@@ -124,19 +147,25 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
   const [existingCategoryLinks, setExistingCategoryLinks] = useState<
     ListingCategoryLink[]
   >([]);
-  const [displayCategories, setDisplayCategories] = useState<DisplayCategory[]>(
-    []
-  );
+  // REMOVED: const [displayCategories, setDisplayCategories] = useState<DisplayCategory[]>([])
   
-  const [isInitialDataLoaded, setIsInitialDataLoaded] = useState(false);
+  // const [isInitialDataLoaded, setIsInitialDataLoaded] = useState(false); // REMOVE OLD FLAG
+  const [isLoadingCoreData, setIsLoadingCoreData] = useState(true); // NEW: Tracks core data loading
+  const [hasPopulatedForm, setHasPopulatedForm] = useState(false);    // NEW: Tracks if form has been populated once
+  
+  const [availableCollections, setAvailableCollections] = useState<CuratedCollection[]>([]);
+  const [collectionSelections, setCollectionSelections] = useState<CollectionSelectionState>({});
+  const [collectionsLoading, setCollectionsLoading] = useState(true);
   
   const [formData, setFormData] = useState({
     // Listings Table Fields
     location: "",
+    location_ar: "",
     google_maps_link: "",
     latitude: "",
     longitude: "",
     location_id: null as string | null,
+    google_place_id: null as string | null, // <-- Add state for place_id
     tags: "", // Array represented as comma-separated string
     listing_type: "",
 
@@ -251,6 +280,30 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
     error: categoryTranslationsError,
   } = useSupabaseTable("category_translations");
 
+  // --- ADDED: Memoize the combined categories (mirrors NewListingForm) ---
+  const combinedDisplayCategories = useMemo(() => {
+    if (baseCategories && allCategoryTranslations) {
+      console.log("[EditListingForm] Memoizing combined categories...");
+      const combined = baseCategories.map((cat) => {
+        const en = allCategoryTranslations.find(
+          (t) => t.category_id === cat.id && t.language_code === "en"
+        );
+        const ar = allCategoryTranslations.find(
+          (t) => t.category_id === cat.id && t.language_code === "ar"
+        );
+        return {
+          ...cat,
+          name_en: en?.name,
+          name_ar: ar?.name,
+        } as DisplayCategory;
+      });
+      combined.sort((a, b) => (a.name_en ?? "").localeCompare(b.name_en ?? ""));
+      console.log("[EditListingForm] Combined categories memoized.");
+      return combined;
+    }
+    return []; // Return empty array if data not ready
+  }, [baseCategories, allCategoryTranslations]); // Depend only on direct data sources
+
   const loading =
     authLoading ||
     listingStatus === "loading" ||
@@ -268,6 +321,12 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
     linksError ||
     categoriesError ||
     categoryTranslationsError;
+
+  // --- NEW: State for fetched location addresses ---
+  // const [fetchedLocationNameEn, setFetchedLocationNameEn] = useState<string | null>(null);
+  // const [fetchedLocationNameAr, setFetchedLocationNameAr] = useState<string | null>(null);
+  // const [locationTranslationsLoading, setLocationTranslationsLoading] = useState(false);
+  // -----------------------------------------------
 
   // --- Effect to find specific translations and category links for this listing ---
   // This effect now ONLY sets the intermediate state. 
@@ -306,44 +365,117 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
     }
   }, [allTranslations, allCategoryLinks, listingId]);
 
-  // --- Effect to Populate Form Data on Initial Load (REVISED) ---
+  // --- NEW Effect to track core data loading status --- 
   useEffect(() => {
-    console.log(`%c[EditListingForm] Running REVISED effect to populate form data`, 'color: green');
-    console.log("[EditListingForm] Dependencies for REVISED populate effect:", {
+      const coreDataIsLoading = 
+          listingStatus === "loading" ||
+          listingStatus === "idle" ||
+          translationsStatus === "loading" ||
+          translationsStatus === "idle" ||
+          linksStatus === "loading" ||
+          linksStatus === "idle";
+          
+      if (!coreDataIsLoading) {
+          console.log("%c[EditListingForm] Core data (listing, translations, links) has finished loading.", "color: #999;");
+          setIsLoadingCoreData(false);
+      } else {
+           console.log("%c[EditListingForm] Core data is still loading...", "color: #999;");
+          // Ensure it's true if any dependency is still loading
+          setIsLoadingCoreData(true); 
+      }
+  }, [listingStatus, translationsStatus, linksStatus]);
+  // ----------------------------------------------------
+
+  // --- REVISED: Effect to fetch location translations and UPDATE FORM DATA --- 
+  useEffect(() => {
+    const fetchLocationTranslations = async (locId: string) => {
+      if (!supabase) return;
+      console.log(`%c[EditListingForm] Fetching location translations for location_id: ${locId}`, 'color: brown');
+      // Removed setLocationTranslationsLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from('location_translations')
+          .select('language_code, name') // Only need name now
+          .eq('location_id', locId);
+
+        if (error) {
+          console.error("Error fetching location translations:", error);
+          // Optionally set an error state here
+          return; 
+        }
+        
+        console.log("[EditListingForm] Location translations received:", data);
+        const enTranslation = data?.find(t => t.language_code === 'en');
+        const arTranslation = data?.find(t => t.language_code === 'ar');
+        
+        // Directly update formData with fetched names
+        const fetchedNameEn = enTranslation?.name || null;
+        const fetchedNameAr = arTranslation?.name || null;
+        console.log(`[EditListingForm] Fetched location names: EN='${fetchedNameEn}', AR='${fetchedNameAr}'. Updating formData...`);
+        setFormData(prev => ({
+            ...prev,
+            location: fetchedNameEn ?? prev.location, // Update if fetched, otherwise keep existing
+            location_ar: fetchedNameAr ?? prev.location_ar // Update if fetched, otherwise keep existing
+        }));
+        
+      } catch (err) {
+        console.error("Unexpected error fetching location translations:", err);
+      } 
+      // Removed finally block with setLocationTranslationsLoading(false);
+    };
+
+    // Only fetch if we have a location_id from the main listing data
+    if (listing && listing.location_id) {
+        console.log(`[LocationFetchEffect] Found location_id: ${listing.location_id}, calling fetchLocationTranslations.`);
+        fetchLocationTranslations(listing.location_id);
+    } else {
+        console.log(`[LocationFetchEffect] No listing or listing.location_id found.`);
+    }
+  // Depend on the listing object (specifically listing.location_id) and supabase client
+  }, [listing, supabase]);
+  // --------------------------------------------------------------------------
+
+  // --- REVISED Effect to Populate Form Data on Initial Load --- 
+  useEffect(() => {
+    console.log(`%c[FormPopulationEffect] Running`, 'color: green');
+    console.log("[FormPopulationEffect] Dependencies:", {
+        isLoadingCoreData,
+        hasPopulatedForm,
         listingExists: !!listing,
         allTranslationsExist: !!allTranslations,
-        allCategoryLinksExist: !!allCategoryLinks,
-        isInitialDataLoaded
+        allCategoryLinksExist: !!allCategoryLinks
     });
 
-    // Populate only if base listing data exists AND initial load hasn't happened
-    if (listing && !isInitialDataLoaded && allTranslations && allCategoryLinks) {
-       console.log('[EditListingForm] REVISED: Dependencies met, attempting to populate...');
+    // Populate only if form hasn't been populated AND core listing data exists
+    // REMOVED dependency on fetchedLocationNameEn/Ar
+    if (!hasPopulatedForm && listing && allTranslations && allCategoryLinks) {
+       console.log('[FormPopulationEffect] Conditions met (not populated yet, core data exists), attempting to populate...');
 
        // Re-find translations and links directly within this effect
        const en = allTranslations.find(t => t.listing_id === listingId && t.language_code === 'en');
        const ar = allTranslations.find(t => t.listing_id === listingId && t.language_code === 'ar');
        const links = allCategoryLinks.filter(link => link.listing_id === listingId);
        const currentCategoryIds = links.map(link => link.category_id);
-
-       // Only proceed if all pieces are found
+       
+       // Check if translations and links were actually found
        if (en && ar && links) {
-          console.log('[EditListingForm] REVISED: Found en, ar, links. Preparing initialFormData...');
+          console.log('[FormPopulationEffect] Found en, ar, links. Preparing initialFormData...');
           const joinArray = (arr: string[] | null | undefined): string => arr ? arr.join(', ') : '';
 
-          // --- Reconstruct initialFormData using en, ar, listing --- 
-          // (Ensure ALL fields from the original state are populated here)
+          // --- Reconstruct initialFormData (use listing.location for initial location) --- 
           const initialFormData = {
-            // Listing fields
-            location: listing.location || "",
+            // Listing fields - Use listing.location initially, location effect will update later if needed
+            location: listing.location || "", // Use listing.location as initial value
+            location_ar: "", // Start with empty Arabic location
             google_maps_link: listing.google_maps_link || "",
             latitude: listing.latitude?.toString() || "",
             longitude: listing.longitude?.toString() || "",
             location_id: listing.location_id || null,
+            google_place_id: (listing as any).google_place_id || null,
             tags: joinArray(listing.tags),
             listing_type: (listing as Listing).listing_type || "",
             
-            // English Translation fields (using 'en')
+             // English Translation fields (using listing_translations)
             name_en: en.name || "",
             description_en: en.description || "",
             opening_hours_en: en.opening_hours || "",
@@ -412,255 +544,330 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
           };
           // --- End Reconstruction ---
 
-          console.log(`%c[EditListingForm] REVISED: Setting initial formData.listing_type to: ${initialFormData.listing_type}`, "color: blue; background: #eee;");
-          console.log("%c[EditListingForm] REVISED: Calling setFormData from initial population useEffect", "color: orange");
+          console.log(`[FormPopulationEffect] Prepared initialFormData. Location AR set to: '${initialFormData.location_ar}' (from fetched '${initialFormData.location_ar}')`);
+          console.log(`%c[FormPopulationEffect] Calling setFormData`, "color: orange");
           setFormData(initialFormData);
-          setIsInitialDataLoaded(true); // Set flag after initial population
+          setHasPopulatedForm(true); // <-- Set flag HERE after successful population
        } else {
-          console.warn('[EditListingForm] REVISED: Could not find required translations or links even though base data is present. Form data not set.');
+          console.warn('[FormPopulationEffect] Could not find required EN/AR translations or links even though base listing is present. Form data not set.');
        }
     } else {
-       console.log('[EditListingForm] REVISED: Conditions not met for population (missing listing, already loaded, or missing raw translation/link data)');
+       console.log('[FormPopulationEffect] Conditions not met for population (missing data, already populated, or waiting for core data)');
     }
-  // Depend only on raw data sources, the flag, and listingId
-  }, [listing, allTranslations, allCategoryLinks, isInitialDataLoaded, listingId]);
+  // Depend only on core data and the populated flag
+  }, [listing, allTranslations, allCategoryLinks, hasPopulatedForm, listingId]); // Removed fetchedLocationNameEn/Ar, added listingId
 
-  // Effect to combine categories and translations
+  // --- Fetch Available Collections & Existing Associations ---
   useEffect(() => {
-    if (baseCategories && allCategoryTranslations) {
-      const combined = baseCategories.map((cat) => {
-        const en = allCategoryTranslations.find(
-          (t) => t.category_id === cat.id && t.language_code === "en"
-        );
-        const ar = allCategoryTranslations.find(
-          (t) => t.category_id === cat.id && t.language_code === "ar"
-        );
-        return {
-          ...cat,
-          name_en: en?.name,
-          name_ar: ar?.name,
-        } as DisplayCategory;
-      });
-      combined.sort((a, b) => (a.name_en ?? "").localeCompare(b.name_en ?? ""));
-      setDisplayCategories(combined);
-    }
-  }, [baseCategories, allCategoryTranslations]);
+    const fetchCollections = async () => {
+      if (!supabase) return;
+      console.log("%c[EditListingForm] Fetching available collections & existing associations...", "color: purple");
+      setCollectionsLoading(true);
 
-  // Wrap handleChange with useCallback
-  const handleChange = useCallback((
-    e: ChangeEvent<
-      HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
-    >
-  ) => {
-    const { name, value, type } = e.target;
-    const newValue =
-      type === "checkbox" ? (e.target as HTMLInputElement).checked : value;
-    
-    console.log(`%c[EditListingForm] Calling setFormData from handleChange for field: ${name}`, "color: orange");
-    setFormData((prev) => ({
-      ...prev,
-      [name]: newValue,
-    }));
+      try {
+        // 1. Fetch all available collections
+        const { data: collectionsData, error: collectionsError } = await supabase
+          .from("curated_collections")
+          .select("id, name_en:name") // Changed: Select 'name' but alias it as 'name_en'
+          .order("name"); // Keep order by the actual column name 'name'
+
+        if (collectionsError) throw collectionsError;
+        console.log("[EditListingForm] Available collections fetched:", collectionsData);
+        setAvailableCollections(collectionsData || []);
+
+        // 2. Fetch existing collection links for this specific listing
+        const { data: linksData, error: linksError } = await supabase
+          .from("curated_collection_items")
+          .select("collection_id, feature_on_home")
+          .eq("listing_id", listingId);
+
+        if (linksError) throw linksError;
+        console.log("[EditListingForm] Existing collection links fetched:", linksData);
+
+        // 3. Initialize selection state based on existing links
+        const initialSelections: CollectionSelectionState = {};
+        (collectionsData || []).forEach(collection => {
+          const existingLink = linksData?.find(link => link.collection_id === collection.id);
+          initialSelections[collection.id] = {
+            selected: !!existingLink,
+            featured: existingLink?.feature_on_home || false
+          };
+        });
+         console.log("[EditListingForm] Initialized collection selections:", initialSelections);
+        setCollectionSelections(initialSelections);
+
+      } catch (error: any) {
+        console.error("Error fetching collections or links:", error);
+        setErrorMessage(`Failed to load collection data: ${error.message}`);
+        setAvailableCollections([]); // Reset on error
+        setCollectionSelections({}); // Reset on error
+      } finally {
+        setCollectionsLoading(false);
+      }
+    };
+
+    fetchCollections();
+  }, [supabase, listingId]); // Depend on supabase client and listingId
+
+  // --- NEW: Handle Form Input Change ---
+  const handleChange = useCallback((e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { name, value } = e.target;
+    console.log(`[EditListingForm] handleChange: name=${name}, value=${value.substring(0, 50)}...`);
+    setFormData(prev => ({ ...prev, [name]: value }));
   }, []);
 
-  // Wrap handleCategoryChange with useCallback
+  // --- NEW: Handle Category Checkbox Change ---
   const handleCategoryChange = useCallback((categoryId: string, checked: boolean) => {
-    console.log(`%c[EditListingForm] Calling setFormData from handleCategoryChange for categoryId: ${categoryId}`, "color: orange");
-    setFormData((prev) => {
-      let newCategoryIds = [...prev.categoryIds];
-
-      if (checked && !newCategoryIds.includes(categoryId)) {
-        newCategoryIds.push(categoryId);
-      } else if (!checked && newCategoryIds.includes(categoryId)) {
-        newCategoryIds = newCategoryIds.filter((catId) => catId !== categoryId);
-      }
-      
-      return {
-        ...prev,
-        categoryIds: newCategoryIds,
-      };
+    console.log(`[EditListingForm] handleCategoryChange: categoryId=${categoryId}, checked=${checked}`);
+    setFormData(prev => {
+        const currentCategoryIds = prev.categoryIds || [];
+        if (checked) {
+            // Add categoryId if it's not already there
+            return { ...prev, categoryIds: Array.from(new Set([...currentCategoryIds, categoryId])) };
+        } else {
+            // Remove categoryId
+            return { ...prev, categoryIds: currentCategoryIds.filter(id => id !== categoryId) };
+        }
     });
   }, []);
 
-  const handleSubmit = async (e: FormEvent) => {
+   // --- NEW: Handle Collection Checkbox Change ---
+   const handleCollectionChange = useCallback((collectionId: string, selected: boolean) => {
+    console.log(`[EditListingForm] handleCollectionChange: collectionId=${collectionId}, selected=${selected}`);
+    setCollectionSelections(prev => ({
+      ...prev,
+      [collectionId]: {
+        ...prev[collectionId], // Keep existing 'featured' state if possible
+        selected: selected,
+        // Reset 'featured' to false if unselected
+        featured: selected ? (prev[collectionId]?.featured || false) : false 
+      }
+    }));
+  }, []);
+
+  // --- NEW: Handle Collection Feature Switch Change ---
+  const handleFeatureChange = useCallback((collectionId: string, featured: boolean) => {
+      console.log(`[EditListingForm] handleFeatureChange: collectionId=${collectionId}, featured=${featured}`);
+      setCollectionSelections(prev => {
+          // Ensure the collection exists in the state before updating feature flag
+          if (prev[collectionId]) {
+              return {
+                  ...prev,
+                  [collectionId]: {
+                      ...prev[collectionId],
+                      featured: featured
+                  }
+              };
+          }
+          // Log a warning or handle if the collection somehow isn't in the state
+          console.warn(`[EditListingForm] Tried to update feature for collection ${collectionId} which is not in selection state.`);
+          return prev; 
+      });
+  }, []);
+
+
+  // --- NEW: Fetch Location Details Handler ---
+  const handleFetchLocationDetails = async () => {
+      const url = formData.google_maps_link;
+      if (!url || !url.trim()) {
+          setErrorMessage("Please enter a Google Maps link first.");
+          return;
+      }
+      
+      setIsFetchingLocation(true); // <-- Set true before fetch
+      setErrorMessage(null); // Clear previous errors
+      console.log("[EditListingForm] Fetching location details for URL:", url);
+
+      try {
+          const response = await fetch('/api/location-lookup', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ url })
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+              console.error("Location Lookup API Error:", data);
+              throw new Error(data.message || `Failed to fetch location details (${response.status})`);
+          }
+
+          console.log("[EditListingForm] Location details received:", data);
+          
+          // Update form state with fetched data
+          setFormData(prev => ({
+              ...prev,
+              location: data.name_en || prev.location, // Use fetched EN address, keep old if null
+              location_ar: data.name_ar || '', // Use fetched AR address, default to empty if null
+              latitude: data.latitude?.toString() || prev.latitude,
+              longitude: data.longitude?.toString() || prev.longitude,
+              google_place_id: data.google_place_id || null, // <-- Save fetched place_id
+          }));
+          // Maybe show a success toast/message here
+
+      } catch (error: any) {
+          console.error("Failed to fetch location details:", error);
+          setErrorMessage(error.message || "An unexpected error occurred while fetching location details.");
+      } finally {
+          setIsFetchingLocation(false); // <-- Set false after fetch (success or error)
+      }
+  };
+  // -----------------------------------------
+
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (
-      !supabase ||
-      !updateListingRow ||
-      !addListingCategoryLink ||
-      !removeListingCategoryLink ||
-      !translationEn?.id ||
-      !translationAr?.id
-    ) {
-      setErrorMessage(
-        "Data update functions, client, or translation IDs not ready."
-      );
-      return;
-    }
+    console.log("%c[EditListingForm] handleSubmit triggered!", "color: green; font-weight: bold;"); // <-- Add log here
     setSaving(true);
     setErrorMessage(null);
 
-    // Helper function to parse comma-separated string to array or null
-    const parseArray = (input: string): string[] | null => {
-      const trimmed = input.trim();
-      return trimmed ? trimmed.split(",").map((s) => s.trim()) : null;
+    // --- Prepare data ---
+    const parseArray = (str: string) => str ? str.split(',').map(t => t.trim()).filter(t => t) : [];
+    
+    // 1. Direct Listing Table Fields
+    const listingPayload = {
+      listing_type: formData.listing_type,
+      google_maps_link: formData.google_maps_link || null,
+      tags: parseArray(formData.tags),
+      latitude: parseFloat(formData.latitude) || null,
+      longitude: parseFloat(formData.longitude) || null,
+      google_place_id: formData.google_place_id || null, 
+      // Note: Location name/address fields are separate for location_translations update
+      // location: formData.location, // We probably don't need this if using location_translations
     };
 
-    try {
-      // 1. Prepare data for the 'listings' table update
-      const listingUpdateData: Partial<
-        Omit<Listing, "id" | "created_at" | "updated_at">
-      > = {
-        location: formData.location, // Required field
-        google_maps_link: formData.google_maps_link || null,
-        latitude: formData.latitude ? parseFloat(formData.latitude) : null,
-        longitude: formData.longitude ? parseFloat(formData.longitude) : null,
-        location_id: formData.location_id || null,
-        tags: parseArray(formData.tags), // Parse array
-        listing_type: formData.listing_type,
-      };
-      // Add validation
-      if (!listingUpdateData.location) {
-        throw new Error("Location field is required.");
-      }
+    // 2. Location Translation Fields (for the separate location entry)
+    const locationTranslationPayload = {
+        name_en: formData.location,       // The English Address from the form
+        name_ar: formData.location_ar,    // The Arabic Address from the form
+        location_id: formData.location_id // Pass existing location_id if available
+    };
 
-      // 2. Update the base listing
-      await updateListingRow(listingUpdateData);
-
-      // 3. Prepare English translation update data
-      const translationEnUpdateData: Partial<
-        Omit<ListingTranslation, "id" | "listing_id" | "language_code">
-      > = {
-        name: formData.name_en, // Required field
-        description: formData.description_en || null,
-        opening_hours: formData.opening_hours_en || null,
+    // 3. Listing Translation Fields (for this specific listing's translatable content)
+    const listingTranslationsPayload = [
+      {
+        language_code: 'en',
+        name: formData.name_en, // Listing Name EN
+        description: formData.description_en, // Listing Desc EN
+        opening_hours: formData.opening_hours_en,
         popular_stores: parseArray(formData.popular_stores_en),
         entertainment: parseArray(formData.entertainment_en),
         dining_options: parseArray(formData.dining_options_en),
         special_services: parseArray(formData.special_services_en),
         nearby_attractions: parseArray(formData.nearby_attractions_en),
-        parking_info: formData.parking_info_en || null,
-        cuisine_type: formData.cuisine_type_en || null,
-        story_behind: formData.story_behind_en || null,
+        parking_info: formData.parking_info_en,
+        cuisine_type: formData.cuisine_type_en,
+        story_behind: formData.story_behind_en,
         menu_highlights: parseArray(formData.menu_highlights_en),
-        price_range: formData.price_range_en || null,
+        price_range: formData.price_range_en,
         dietary_options: parseArray(formData.dietary_options_en),
-        reservation_info: formData.reservation_info_en || null,
+        reservation_info: formData.reservation_info_en,
         seating_options: parseArray(formData.seating_options_en),
         special_features: parseArray(formData.special_features_en),
-        historical_significance: formData.historical_significance_en || null,
-        entry_fee: formData.entry_fee_en || null,
-        best_time_to_visit: formData.best_time_to_visit_en || null,
-        tour_guide_availability: formData.tour_guide_availability_en || null,
-        tips: formData.tips_en || null,
+        historical_significance: formData.historical_significance_en,
+        entry_fee: formData.entry_fee_en,
+        best_time_to_visit: formData.best_time_to_visit_en,
+        tour_guide_availability: formData.tour_guide_availability_en,
+        tips: formData.tips_en,
         activities: parseArray(formData.activities_en),
         facilities: parseArray(formData.facilities_en),
-        safety_tips: formData.safety_tips_en || null,
-        duration: formData.duration_en || null,
+        safety_tips: formData.safety_tips_en,
+        duration: formData.duration_en,
         highlights: parseArray(formData.highlights_en),
-        religious_significance: formData.religious_significance_en || null,
-        entry_rules: formData.entry_rules_en || null,
-        slug: formData.slug_en || null,
-      };
-      // Add validation
-      if (!translationEnUpdateData.name) {
-        throw new Error("English Name field is required.");
-      }
-
-      // Update English Translation Row
-      const { error: updateEnError } = await supabase
-        .from("listing_translations")
-        .update(translationEnUpdateData)
-        .eq("id", translationEn.id);
-      if (updateEnError)
-        console.warn("Failed to update EN translation:", updateEnError);
-
-      // 4. Prepare Arabic translation update data
-      const translationArUpdateData: Partial<
-        Omit<ListingTranslation, "id" | "listing_id" | "language_code">
-      > = {
-        name: formData.name_ar, // Required field
-        description: formData.description_ar || null,
-        opening_hours: formData.opening_hours_ar || null,
+        religious_significance: formData.religious_significance_en,
+        entry_rules: formData.entry_rules_en,
+        slug: formData.slug_en,
+      },
+      {
+        language_code: 'ar',
+        name: formData.name_ar, // Listing Name AR
+        description: formData.description_ar, // Listing Desc AR
+        opening_hours: formData.opening_hours_ar,
         popular_stores: parseArray(formData.popular_stores_ar),
         entertainment: parseArray(formData.entertainment_ar),
         dining_options: parseArray(formData.dining_options_ar),
         special_services: parseArray(formData.special_services_ar),
         nearby_attractions: parseArray(formData.nearby_attractions_ar),
-        parking_info: formData.parking_info_ar || null,
-        cuisine_type: formData.cuisine_type_ar || null,
-        story_behind: formData.story_behind_ar || null,
+        parking_info: formData.parking_info_ar,
+        cuisine_type: formData.cuisine_type_ar,
+        story_behind: formData.story_behind_ar,
         menu_highlights: parseArray(formData.menu_highlights_ar),
-        price_range: formData.price_range_ar || null,
+        price_range: formData.price_range_ar,
         dietary_options: parseArray(formData.dietary_options_ar),
-        reservation_info: formData.reservation_info_ar || null,
+        reservation_info: formData.reservation_info_ar,
         seating_options: parseArray(formData.seating_options_ar),
         special_features: parseArray(formData.special_features_ar),
-        historical_significance: formData.historical_significance_ar || null,
-        entry_fee: formData.entry_fee_ar || null,
-        best_time_to_visit: formData.best_time_to_visit_ar || null,
-        tour_guide_availability: formData.tour_guide_availability_ar || null,
-        tips: formData.tips_ar || null,
+        historical_significance: formData.historical_significance_ar,
+        entry_fee: formData.entry_fee_ar,
+        best_time_to_visit: formData.best_time_to_visit_ar,
+        tour_guide_availability: formData.tour_guide_availability_ar,
+        tips: formData.tips_ar,
         activities: parseArray(formData.activities_ar),
         facilities: parseArray(formData.facilities_ar),
-        safety_tips: formData.safety_tips_ar || null,
-        duration: formData.duration_ar || null,
+        safety_tips: formData.safety_tips_ar,
+        duration: formData.duration_ar,
         highlights: parseArray(formData.highlights_ar),
-        religious_significance: formData.religious_significance_ar || null,
-        entry_rules: formData.entry_rules_ar || null,
-        slug: formData.slug_ar || null,
-      };
-      // Add validation
-      if (!translationArUpdateData.name) {
-        throw new Error("Arabic Name field is required.");
-      }
+        religious_significance: formData.religious_significance_ar,
+        entry_rules: formData.entry_rules_ar,
+        slug: formData.slug_ar,
+      },
+    ];
 
-      // Update Arabic Translation Row
-      const { error: updateArError } = await supabase
-        .from("listing_translations")
-        .update(translationArUpdateData)
-        .eq("id", translationAr.id);
-      if (updateArError)
-        console.warn("Failed to update AR translation:", updateArError);
+    // 4. Category Links
+    const categoryIdsPayload = formData.categoryIds;
 
-      // 5. Update 'listing_categories' join table
-      const currentCategoryIds = new Set(
-        existingCategoryLinks.map((link) => link.category_id)
-      );
-      const selectedCategoryIds = new Set(formData.categoryIds);
+    // 5. Collection Links
+    const collectionLinksPayload = Object.entries(collectionSelections)
+        .filter(([_, state]) => state.selected) // Only include selected collections
+        .map(([collectionId, state]) => ({
+            collection_id: collectionId,
+            feature_on_home: state.featured
+        }));
 
-      const categoriesToAdd = formData.categoryIds.filter(
-        (id) => !currentCategoryIds.has(id)
-      );
-      const linksToRemove = existingCategoryLinks.filter(
-        (link) => !selectedCategoryIds.has(link.category_id)
-      );
+    // Combine into final payload for the API
+    const finalPayload = {
+        listingData: listingPayload,
+        locationTranslations: locationTranslationPayload, // Use clearer key
+        listingTranslations: listingTranslationsPayload, // Use clearer key
+        categoryIds: categoryIdsPayload,
+        collectionLinks: collectionLinksPayload
+    };
 
-      // Add new links
-      if (categoriesToAdd.length > 0) {
-        const addPromises = categoriesToAdd.map((catId) =>
-          addListingCategoryLink({ listing_id: listingId, category_id: catId })
-        );
-        await Promise.all(addPromises);
-        // Consider adding error handling for individual additions if needed
-      }
+    console.log("Submitting Final Payload:", JSON.stringify(finalPayload, null, 2));
 
-      // Remove old links (using the ID of the join table row)
-      if (linksToRemove.length > 0) {
-        const removePromises = linksToRemove.map((link) =>
-          link.id ? removeListingCategoryLink(link.id) : Promise.resolve() // Check if link.id exists
-        );
-        await Promise.all(removePromises);
-        // Consider adding error handling for individual removals if needed
-      }
+    try {
+        const response = await fetch(`/api/listings/${listingId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(finalPayload) // Send the refined payload
+        });
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({})); // Try to parse error JSON
+            // Log the detailed error for debugging
+            console.error("API Error Response:", { 
+                status: response.status, 
+                statusText: response.statusText, 
+                body: errorData 
+            });
+            throw new Error(errorData.message || `Failed to update listing (${response.status})`);
+        }
+        // --- Simulation (Remove this) ---
+        // await new Promise(resolve => setTimeout(resolve, 1500));
+        // console.log("Simulated listing update successful.");
+        // --- End Simulation ---
+        
+        console.log("Listing update successful via API.");
 
-      console.log("Listing update successful, redirecting...");
-      router.push("/dashboard/listings"); // Redirect on success
-    } catch (err: any) {
-      console.error("Error updating listing:", err);
-      const message =
-        err.message || "Failed to update listing. Please try again.";
-      setErrorMessage(message);
+        // router.push('/dashboard/listings'); // Or maybe back to the specific listing view?
+        router.refresh(); // Refresh server components on the current route
+        router.back(); // Go back after save for now
+        // Add success toast/notification here (e.g., using react-hot-toast)
+        // Example: toast.success('Listing updated successfully!');
+
+    } catch (error: any) {
+      console.error("Failed to save listing:", error);
+      setErrorMessage(error.message || "An unexpected error occurred while saving.");
+      // Maybe add a toast error notification here too
+      // Example: toast.error(`Save failed: ${error.message}`);
     } finally {
       setSaving(false);
     }
@@ -709,8 +916,8 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
     );
   }
 
-  // Only show full-page loader during *initial* data load
-  if (loading && !isInitialDataLoaded) { 
+  // Only show full-page loader during *initial* data load (use NEW flag)
+  if (isLoadingCoreData) { 
     return (
       <div className="flex justify-center items-center py-12">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -720,6 +927,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
   }
 
   console.log(`%c[EditListingForm] Rendering with formData.listing_type: ${formData.listing_type}`, "color: purple"); // <-- Log current value on render
+  console.log(`%c[EditListingForm] Button State Check: saving=${saving}, isLoadingCoreData=${isLoadingCoreData}`, "color: orange"); // <-- ADDED LOG
 
   return (
     <>
@@ -751,12 +959,8 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                         name="listing_type" 
                         onValueChange={(value) => {
                             console.log(`[EditListingForm] Listing Type onValueChange triggered with:`, value);
-                            // ONLY update if the value is not empty, preventing the reset
-                            if (value !== "") {
-                                setFormData((prev) => ({ ...prev, listing_type: value }));
-                            } else {
-                                console.log(`[EditListingForm] Ignoring empty value from onValueChange`);
-                            }
+                            // Removed the `if (value !== "")` check to always update state
+                            setFormData((prev) => ({ ...prev, listing_type: value }));
                         }} 
                         value={formData.listing_type}
                     >
@@ -773,35 +977,87 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                     </Select>
                 </div>
                 
-                 {/* Location Name */}
+                 {/* Location Name (English Address) */}
                 <div className="space-y-2">
-                    <Label htmlFor="location">Location Name *</Label>
-                    <Input id="location" name="location" value={formData.location} onChange={handleChange} placeholder="e.g., Central Park Mall" required />
+                    <Label htmlFor="location">Location Name / Address (English)</Label>
+                    <Textarea id="location" name="location" value={formData.location} onChange={handleChange} placeholder="e.g., Main Street, Downtown" />
                 </div>
 
-                 {/* Google Maps Link */}
+                 {/* Google Maps Link + Fetch Button */}
                  <div className="space-y-2">
                     <Label htmlFor="google_maps_link">Google Maps Link</Label>
-                    <Input id="google_maps_link" name="google_maps_link" type="url" value={formData.google_maps_link} onChange={handleChange} placeholder="https://maps.app.goo.gl/..." />
+                    <div className="flex items-center gap-2">
+                        <Input 
+                            id="google_maps_link" 
+                            name="google_maps_link" 
+                            type="url" 
+                            value={formData.google_maps_link} 
+                            onChange={handleChange} 
+                            placeholder="Paste Google Maps URL here"
+                        />
+                        <Button 
+                            type="button" 
+                            onClick={handleFetchLocationDetails} 
+                            disabled={isFetchingLocation} 
+                            variant="outline" 
+                            size="icon"
+                            aria-label="Fetch Location Details"
+                        >
+                            {isFetchingLocation ? 
+                                <Loader2 className="h-4 w-4 animate-spin" /> : 
+                                <DownloadCloud className="h-4 w-4" />
+                            }
+                        </Button>
+                    </div>
+                </div>
+
+                {/* Location Name (Arabic Address) */}
+                <div className="space-y-2">
+                    <Label htmlFor="location_ar">Location Name / Address (Arabic)</Label>
+                    <Textarea 
+                        id="location_ar" 
+                        name="location_ar" 
+                        value={formData.location_ar} 
+                        onChange={handleChange} 
+                        placeholder="مثال: الشارع الرئيسي، وسط البلد" 
+                        dir="rtl" // Set text direction to right-to-left
+                    />
                 </div>
 
                 {/* Tags */}
                 <div className="space-y-2">
-                    <Label htmlFor="tags">Tags (comma-separated)</Label>
+                    <Label htmlFor="tags">Tags</Label>
                     <Input id="tags" name="tags" value={formData.tags} onChange={handleChange} placeholder="e.g., family-friendly, outdoor, shopping" />
                 </div>
 
-                {/* Latitude */}
-                 <div className="space-y-2">
-                    <Label htmlFor="latitude">Latitude</Label>
-                    <Input id="latitude" name="latitude" type="number" step="any" value={formData.latitude} onChange={handleChange} placeholder="e.g., 24.7136" />
+                {/* Latitude & Longitude */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Latitude */}
+                    <div className="space-y-2">
+                        <Label htmlFor="latitude">Latitude</Label>
+                        <Input id="latitude" name="latitude" type="number" step="any" value={formData.latitude} onChange={handleChange} placeholder="e.g., 24.7136" />
+                    </div>
+
+                    {/* Longitude */}
+                    <div className="space-y-2">
+                        <Label htmlFor="longitude">Longitude</Label>
+                        <Input id="longitude" name="longitude" type="number" step="any" value={formData.longitude} onChange={handleChange} placeholder="e.g., 46.6753" />
+                    </div>
                 </div>
 
-                {/* Longitude */}
-                 <div className="space-y-2">
-                    <Label htmlFor="longitude">Longitude</Label>
-                    <Input id="longitude" name="longitude" type="number" step="any" value={formData.longitude} onChange={handleChange} placeholder="e.g., 46.6753" />
+                {/* --- Add Map Display Here (Moved Inside CardContent) --- */}
+                {/* Spanning 2 columns on medium screens and up */}
+                <div className="mt-4 md:col-span-2">
+                  <Label>Map Preview</Label>
+                  <div className="mt-2">
+                      <MapDisplay 
+                          latitude={parsedLatitude}   // <-- Use memoized value
+                          longitude={parsedLongitude} // <-- Use memoized value
+                      />
+                  </div>
                 </div>
+                {/* -------------------------------------------------------- */}
+
             </CardContent>
           </Card>
 
@@ -843,11 +1099,11 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                     {/* === Shop/Mall Specific Fields === */}
                     {formData.listing_type === 'Shop/Mall' && (
                         <>
-                           <div className="space-y-2"><Label htmlFor="popular_stores_en">Popular Stores (English, comma-separated)</Label><Input id="popular_stores_en" name="popular_stores_en" value={formData.popular_stores_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="entertainment_en">Entertainment (English, comma-separated)</Label><Input id="entertainment_en" name="entertainment_en" value={formData.entertainment_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="dining_options_en">Dining Options (English, comma-separated)</Label><Input id="dining_options_en" name="dining_options_en" value={formData.dining_options_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="special_services_en">Special Services (English, comma-separated)</Label><Input id="special_services_en" name="special_services_en" value={formData.special_services_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="popular_stores_en">Popular Stores (English)</Label><Input id="popular_stores_en" name="popular_stores_en" value={formData.popular_stores_en} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="entertainment_en">Entertainment (English)</Label><Input id="entertainment_en" name="entertainment_en" value={formData.entertainment_en} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="dining_options_en">Dining Options (English)</Label><Input id="dining_options_en" name="dining_options_en" value={formData.dining_options_en} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="special_services_en">Special Services (English)</Label><Input id="special_services_en" name="special_services_en" value={formData.special_services_en} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
                        </>
                     )}
@@ -857,14 +1113,14 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                        <>
                            <div className="space-y-2"><Label htmlFor="cuisine_type_en">Cuisine Type (English)</Label><Input id="cuisine_type_en" name="cuisine_type_en" value={formData.cuisine_type_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="story_behind_en">Story Behind (English)</Label><Textarea id="story_behind_en" name="story_behind_en" value={formData.story_behind_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="menu_highlights_en">Menu Highlights (English, comma-separated)</Label><Input id="menu_highlights_en" name="menu_highlights_en" value={formData.menu_highlights_en} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="menu_highlights_en">Menu Highlights (English)</Label><Input id="menu_highlights_en" name="menu_highlights_en" value={formData.menu_highlights_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="price_range_en">Price Range (English)</Label><Input id="price_range_en" name="price_range_en" value={formData.price_range_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="dietary_options_en">Dietary Options (English, comma-separated)</Label><Input id="dietary_options_en" name="dietary_options_en" value={formData.dietary_options_en} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="dietary_options_en">Dietary Options (English)</Label><Input id="dietary_options_en" name="dietary_options_en" value={formData.dietary_options_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="reservation_info_en">Reservation Info (English)</Label><Input id="reservation_info_en" name="reservation_info_en" value={formData.reservation_info_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="seating_options_en">Seating Options (English, comma-separated)</Label><Input id="seating_options_en" name="seating_options_en" value={formData.seating_options_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="special_features_en">Special Features (English, comma-separated)</Label><Input id="special_features_en" name="special_features_en" value={formData.special_features_en} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="seating_options_en">Seating Options (English)</Label><Input id="seating_options_en" name="seating_options_en" value={formData.seating_options_en} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="special_features_en">Special Features (English)</Label><Input id="special_features_en" name="special_features_en" value={formData.special_features_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
                        </>
                    )}
 
@@ -876,8 +1132,8 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                            <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="tour_guide_availability_en">Tour Guide Availability (English)</Label><Input id="tour_guide_availability_en" name="tour_guide_availability_en" value={formData.tour_guide_availability_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English, comma-separated)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
                        </>
                    )}
@@ -885,12 +1141,12 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                    {/* === Park/Nature Specific Fields === */}
                    {formData.listing_type === 'Park/Nature' && (
                        <>
-                           <div className="space-y-2"><Label htmlFor="activities_en">Activities (English, comma-separated)</Label><Input id="activities_en" name="activities_en" value={formData.activities_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English, comma-separated)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="activities_en">Activities (English)</Label><Input id="activities_en" name="activities_en" value={formData.activities_en} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="safety_tips_en">Safety Tips (English)</Label><Textarea id="safety_tips_en" name="safety_tips_en" value={formData.safety_tips_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="entry_fee_en">Entry Fee (English)</Label><Input id="entry_fee_en" name="entry_fee_en" value={formData.entry_fee_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
                        </>
                    )}
@@ -899,11 +1155,11 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                    {formData.listing_type === 'Experience' && (
                        <>
                            <div className="space-y-2"><Label htmlFor="duration_en">Duration (English)</Label><Input id="duration_en" name="duration_en" value={formData.duration_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="highlights_en">Highlights (English, comma-separated)</Label><Input id="highlights_en" name="highlights_en" value={formData.highlights_en} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="highlights_en">Highlights (English)</Label><Input id="highlights_en" name="highlights_en" value={formData.highlights_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="price_range_en">Price Range (English)</Label><Input id="price_range_en" name="price_range_en" value={formData.price_range_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="safety_tips_en">Safety Tips (English)</Label><Textarea id="safety_tips_en" name="safety_tips_en" value={formData.safety_tips_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
                        </>
                    )}
@@ -915,10 +1171,10 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                            <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="tour_guide_availability_en">Tour Guide Availability (English)</Label><Input id="tour_guide_availability_en" name="tour_guide_availability_en" value={formData.tour_guide_availability_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English, comma-separated)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="highlights_en">Highlights (English, comma-separated)</Label><Input id="highlights_en" name="highlights_en" value={formData.highlights_en} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="highlights_en">Highlights (English)</Label><Input id="highlights_en" name="highlights_en" value={formData.highlights_en} onChange={handleChange} /></div>
                        </>
                    )}
 
@@ -929,8 +1185,8 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                            <div className="space-y-2"><Label htmlFor="entry_rules_en">Entry Rules (English)</Label><Textarea id="entry_rules_en" name="entry_rules_en" value={formData.entry_rules_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English, comma-separated)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English, comma-separated)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
                        </>
                    )}
@@ -950,11 +1206,11 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                   {/* === Shop/Mall Specific Fields === */}
                    {formData.listing_type === 'Shop/Mall' && (
                        <>
-                           <div className="space-y-2"><Label htmlFor="popular_stores_ar">Popular Stores (Arabic, comma-separated)</Label><Input dir="rtl" id="popular_stores_ar" name="popular_stores_ar" value={formData.popular_stores_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="entertainment_ar">Entertainment (Arabic, comma-separated)</Label><Input dir="rtl" id="entertainment_ar" name="entertainment_ar" value={formData.entertainment_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="dining_options_ar">Dining Options (Arabic, comma-separated)</Label><Input dir="rtl" id="dining_options_ar" name="dining_options_ar" value={formData.dining_options_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="special_services_ar">Special Services (Arabic, comma-separated)</Label><Input dir="rtl" id="special_services_ar" name="special_services_ar" value={formData.special_services_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="popular_stores_ar">Popular Stores (Arabic)</Label><Input dir="rtl" id="popular_stores_ar" name="popular_stores_ar" value={formData.popular_stores_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="entertainment_ar">Entertainment (Arabic)</Label><Input dir="rtl" id="entertainment_ar" name="entertainment_ar" value={formData.entertainment_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="dining_options_ar">Dining Options (Arabic)</Label><Input dir="rtl" id="dining_options_ar" name="dining_options_ar" value={formData.dining_options_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="special_services_ar">Special Services (Arabic)</Label><Input dir="rtl" id="special_services_ar" name="special_services_ar" value={formData.special_services_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
                        </>
                    )}
@@ -964,14 +1220,14 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                        <>
                            <div className="space-y-2"><Label htmlFor="cuisine_type_ar">Cuisine Type (Arabic)</Label><Input dir="rtl" id="cuisine_type_ar" name="cuisine_type_ar" value={formData.cuisine_type_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="story_behind_ar">Story Behind (Arabic)</Label><Textarea dir="rtl" id="story_behind_ar" name="story_behind_ar" value={formData.story_behind_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="menu_highlights_ar">Menu Highlights (Arabic, comma-separated)</Label><Input dir="rtl" id="menu_highlights_ar" name="menu_highlights_ar" value={formData.menu_highlights_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="menu_highlights_ar">Menu Highlights (Arabic)</Label><Input dir="rtl" id="menu_highlights_ar" name="menu_highlights_ar" value={formData.menu_highlights_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="price_range_ar">Price Range (Arabic)</Label><Input dir="rtl" id="price_range_ar" name="price_range_ar" value={formData.price_range_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="dietary_options_ar">Dietary Options (Arabic, comma-separated)</Label><Input dir="rtl" id="dietary_options_ar" name="dietary_options_ar" value={formData.dietary_options_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="dietary_options_ar">Dietary Options (Arabic)</Label><Input dir="rtl" id="dietary_options_ar" name="dietary_options_ar" value={formData.dietary_options_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="reservation_info_ar">Reservation Info (Arabic)</Label><Input dir="rtl" id="reservation_info_ar" name="reservation_info_ar" value={formData.reservation_info_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="seating_options_ar">Seating Options (Arabic, comma-separated)</Label><Input dir="rtl" id="seating_options_ar" name="seating_options_ar" value={formData.seating_options_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="special_features_ar">Special Features (Arabic, comma-separated)</Label><Input dir="rtl" id="special_features_ar" name="special_features_ar" value={formData.special_features_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="seating_options_ar">Seating Options (Arabic)</Label><Input dir="rtl" id="seating_options_ar" name="seating_options_ar" value={formData.seating_options_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="special_features_ar">Special Features (Arabic)</Label><Input dir="rtl" id="special_features_ar" name="special_features_ar" value={formData.special_features_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
                        </>
                    )}
 
@@ -983,8 +1239,8 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                            <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="tour_guide_availability_ar">Tour Guide Availability (Arabic)</Label><Input dir="rtl" id="tour_guide_availability_ar" name="tour_guide_availability_ar" value={formData.tour_guide_availability_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic, comma-separated)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
                        </>
                    )}
@@ -992,12 +1248,12 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                    {/* === Park/Nature Specific Fields === */}
                    {formData.listing_type === 'Park/Nature' && (
                        <>
-                           <div className="space-y-2"><Label htmlFor="activities_ar">Activities (Arabic, comma-separated)</Label><Input dir="rtl" id="activities_ar" name="activities_ar" value={formData.activities_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic, comma-separated)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="activities_ar">Activities (Arabic)</Label><Input dir="rtl" id="activities_ar" name="activities_ar" value={formData.activities_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="safety_tips_ar">Safety Tips (Arabic)</Label><Textarea dir="rtl" id="safety_tips_ar" name="safety_tips_ar" value={formData.safety_tips_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="entry_fee_ar">Entry Fee (Arabic)</Label><Input dir="rtl" id="entry_fee_ar" name="entry_fee_ar" value={formData.entry_fee_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
                        </>
                    )}
@@ -1006,11 +1262,11 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                    {formData.listing_type === 'Experience' && (
                        <>
                            <div className="space-y-2"><Label htmlFor="duration_ar">Duration (Arabic)</Label><Input dir="rtl" id="duration_ar" name="duration_ar" value={formData.duration_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="highlights_ar">Highlights (Arabic, comma-separated)</Label><Input dir="rtl" id="highlights_ar" name="highlights_ar" value={formData.highlights_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="highlights_ar">Highlights (Arabic)</Label><Input dir="rtl" id="highlights_ar" name="highlights_ar" value={formData.highlights_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="price_range_ar">Price Range (Arabic)</Label><Input dir="rtl" id="price_range_ar" name="price_range_ar" value={formData.price_range_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="safety_tips_ar">Safety Tips (Arabic)</Label><Textarea dir="rtl" id="safety_tips_ar" name="safety_tips_ar" value={formData.safety_tips_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
                        </>
                    )}
@@ -1022,10 +1278,10 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                            <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="tour_guide_availability_ar">Tour Guide Availability (Arabic)</Label><Input dir="rtl" id="tour_guide_availability_ar" name="tour_guide_availability_ar" value={formData.tour_guide_availability_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic, comma-separated)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="highlights_ar">Highlights (Arabic, comma-separated)</Label><Input dir="rtl" id="highlights_ar" name="highlights_ar" value={formData.highlights_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="highlights_ar">Highlights (Arabic)</Label><Input dir="rtl" id="highlights_ar" name="highlights_ar" value={formData.highlights_ar} onChange={handleChange} /></div>
                        </>
                    )}
 
@@ -1036,8 +1292,8 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                            <div className="space-y-2"><Label htmlFor="entry_rules_ar">Entry Rules (Arabic)</Label><Textarea dir="rtl" id="entry_rules_ar" name="entry_rules_ar" value={formData.entry_rules_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic, comma-separated)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic, comma-separated)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
                        </>
                    )}
@@ -1049,11 +1305,11 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
          <Card>
            <CardHeader><CardTitle>Categories</CardTitle></CardHeader>
            <CardContent>
-               {categoriesLoading || categoryTranslationsStatus !== "success" ? (
+               {categoriesLoading ? (
                    <p>Loading categories...</p>
-               ) : displayCategories.length > 0 ? (
+               ) : combinedDisplayCategories.length > 0 ? ( // USE combinedDisplayCategories directly
                   <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                      {displayCategories.map(category => (
+                      {combinedDisplayCategories.map(category => (
                           <div key={category.id} className="flex items-center space-x-2">
                               <Checkbox 
                                   id={`category-${category.id}`}
@@ -1075,17 +1331,57 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
            </CardContent>
          </Card>
 
+        {/* --- Curated Collections Card --- */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Curated Collections</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {collectionsLoading ? (
+               <div className="flex justify-center items-center p-4"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+            ) : availableCollections.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No collections available.</p>
+            ) : (
+              availableCollections.map((collection) => (
+                <div key={collection.id} className="flex items-center justify-between gap-4 rounded-md border p-3">
+                  <div className="flex items-center gap-3">
+                     <Checkbox
+                      id={`collection-${collection.id}`}
+                      checked={collectionSelections[collection.id]?.selected || false}
+                      // Pass boolean directly
+                      onCheckedChange={(checked) => handleCollectionChange(collection.id, !!checked)} 
+                    />
+                    <Label htmlFor={`collection-${collection.id}`} className="cursor-pointer">
+                      {collection.name_en}
+                    </Label>
+                  </div>
+                  {/* Conditional Switch */}
+                  {collectionSelections[collection.id]?.selected && (
+                     <div className="flex items-center gap-2">
+                         <Label htmlFor={`feature-${collection.id}`} className="text-sm text-muted-foreground">
+                           Feature on Home
+                         </Label>
+                         <Switch
+                             id={`feature-${collection.id}`}
+                             checked={collectionSelections[collection.id]?.featured || false}
+                             onCheckedChange={(checked) => handleFeatureChange(collection.id, checked)}
+                         />
+                     </div>
+                  )}
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+
         {/* Submit Buttons */}
         <div className="flex justify-end gap-3 mt-8">
           <Link href="/dashboard/listings">
              <Button type="button" variant="outline" disabled={saving}>Cancel</Button>
           </Link>
-          <Button type="submit" disabled={saving}>
+          <Button type="submit" disabled={saving || isLoadingCoreData}>
             {saving ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                Saving Changes...
-              </>
+              <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...</>
             ) : (
               <>
                 <Save className="h-4 w-4 mr-2" />

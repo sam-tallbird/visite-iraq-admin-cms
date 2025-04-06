@@ -1,7 +1,5 @@
 {
   "/dashboard/listings/page": "app/dashboard/listings/page.js",
-  "/dashboard/listings/new/page": "app/dashboard/listings/new/page.js",
-  "/dashboard/listings/[id]/edit/page": "app/dashboard/listings/[id]/edit/page.js",
-  "/dashboard/categories/page": "app/dashboard/categories/page.js",
-  "/dashboard/appearance/hero-banners/page": "app/dashboard/appearance/hero-banners/page.js"
+  "/dashboard/page": "app/dashboard/page.js",
+  "/dashboard/listings/new/page": "app/dashboard/listings/new/page.js"
 }

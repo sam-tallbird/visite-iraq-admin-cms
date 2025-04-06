@@ -12,7 +12,9 @@ import {
   LogOut,
   Home,
   MapPin,
-  LayoutTemplate
+  LayoutTemplate,
+  Palette,
+  List
 } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "@/providers/auth-provider";
@@ -146,10 +148,16 @@ export default function Sidebar({ isMobile, onItemClick }: SidebarProps) {
       onSubMenuToggle: toggleContent
     },
     { 
-      href: "/dashboard/appearance/hero-banners", 
-      icon: <LayoutTemplate className="h-5 w-5" />,
+      href: "/dashboard/appearance/hero-banners",
+      icon: <Palette className="h-5 w-5" />,
       title: "Appearance",
       active: pathname.startsWith("/dashboard/appearance")
+    },
+    { 
+      href: "/dashboard/collections",
+      icon: <List className="h-5 w-5" />,
+      title: "Collections",
+      active: pathname.startsWith("/dashboard/collections")
     },
     { 
       href: "/dashboard/users", 

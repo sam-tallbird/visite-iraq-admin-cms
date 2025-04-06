@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { 
@@ -22,45 +22,71 @@ import Shell from "@/components/layout/shell";
 import { useSupabaseTable } from "@/hooks/use-supabase";
 import { useAuth } from "@/providers/auth-provider";
 
-// Define the Listing type based on Supabase 'listings' table
-// TODO: Add translation fields later
+// Define the Listing type - Simplified for debugging
 interface Listing {
   id: string;
-  location?: string | null;
-  status?: "Published" | "Draft" | "Archived";
-  created_at?: string | null; // ISO string
-  updated_at?: string | null; // ISO string
-  // Add other relevant fields from 'listings' table if needed for display
-  // e.g., thumbnail_url if you create one
+  // status?: "Published" | "Draft" | "Archived"; // Removed non-existent column
+  // created_at?: string | null;
+  // updated_at?: string | null;
+  listing_translations: Array<{ 
+    name: string;
+    language_code: string;
+  }>;
+  name_en?: string | null; // Processed field
 }
 
-// Define type for sorting fields present in the basic Listing interface
-type SortableListingField = 'status' | 'created_at' | 'updated_at' | 'location';
+// Define type for sorting fields - Simplified for debugging
+type SortableListingField = 'name_en'; // Only name_en available for now
 
 export default function ListingsPage() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
   const [searchTerm, setSearchTerm] = useState("");
-  const [sortField, setSortField] = useState<SortableListingField>("updated_at");
-  const [sortDirection, setSortDirection] = useState("desc");
-  const [statusFilter, setStatusFilter] = useState("All");
+  // Default sort by name_en now
+  const [sortField, setSortField] = useState<SortableListingField>("name_en"); 
+  const [sortDirection, setSortDirection] = useState("asc"); // Default asc for name
+  // const [statusFilter, setStatusFilter] = useState("All"); // Removed status filter
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<{show: boolean, id: string | null}>({show: false, id: null});
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Use the Supabase hook to fetch listings
-  // TODO: Add server-side filtering/sorting/pagination later
+  // Use the Supabase hook - Simplified selectQuery for debugging
   const { 
-    data: listings,
+    data: listingsData, 
     status, 
     error, 
     refresh, 
     remove: removeListing
-  } = useSupabaseTable('listings');
+  } = useSupabaseTable(
+      'listings', 
+      // Fetch only id and translation name for now
+      { selectQuery: "id, listing_translations(name, language_code)" } 
+    );
 
-  // Combined loading state
+  // --- DEBUGGING LOGS --- 
+  console.log(`[ListingsPage] useSupabaseTable status: ${status}`);
+  if (error) {
+    console.error("[ListingsPage] useSupabaseTable error:", error);
+  }
+  console.log("[ListingsPage] Raw listingsData:", listingsData);
+  // --------------------
+
+  // --- useMemo hook --- 
+  const listings = useMemo(() => {
+    if (!listingsData) return [];
+    const processedListings = listingsData.map((listing: any) => {
+        const enTranslation = listing.listing_translations?.find((t: any) => t.language_code === 'en');
+        return {
+            ...listing,
+            name_en: enTranslation?.name || null 
+        };
+    }).filter(l => l !== null) as Listing[]; 
+    console.log("[ListingsPage] Processed listings (after useMemo):", processedListings);
+    return processedListings; 
+  }, [listingsData]);
+
   const loading = status === 'loading' || status === 'idle' || authLoading;
 
-  // Handle sorting
+  // Handle sorting - Simplified
   const handleSort = (field: SortableListingField) => {
     if (sortField === field) {
       setSortDirection(sortDirection === "asc" ? "desc" : "asc");
@@ -72,7 +98,6 @@ export default function ListingsPage() {
 
   // Handle viewing a listing
   const handleView = (id: string) => {
-    // This would typically navigate to a view page
     router.push(`/dashboard/listings/${id}`);
   };
 
@@ -96,76 +121,48 @@ export default function ListingsPage() {
       return;
     }
     try {
-      // TODO: Add deletion of related translations, categories, media
       await removeListing(id);
       setShowDeleteConfirm({show: false, id: null});
-      // refresh(); // Refresh is implicitly handled by the hook after remove
     } catch (error: any) {
       console.error("Error deleting listing:", error);
       alert(`Failed to delete listing: ${error.message}`);
     }
   };
 
-  // Format date for display (works with ISO strings)
+  // Format date - Keep function, but won't be used in table for now
   const formatDate = (dateString: string | null | undefined) => {
-    if (!dateString) {
-      return "N/A";
-    }
+    if (!dateString) return "N/A";
     try {
-      const date = new Date(dateString);
-      return date.toLocaleDateString('en-US', { 
-        year: 'numeric', 
-        month: 'short', 
-        day: 'numeric' 
-      });
-    } catch (e) {
-      console.error("Error formatting date string:", dateString, e);
-      return "Invalid Date";
+      return new Date(dateString).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+    } catch (e) { 
+        console.error("Error formatting date string:", dateString, e);
+        return "Invalid Date"; 
     }
   };
 
-  // Client-side filtering (Simplified)
+  // Client-side filtering - Only search name_en
   let filteredListings: Listing[] = [];
-  if (listings != null) {
-      filteredListings = (listings as Listing[]).filter((listing) => {
+  if (listings && listings.length > 0) { 
+      filteredListings = listings.filter((listing) => {
           if (!listing) return false;
-          const location = listing.location || "";
-          const matchesSearch = location.toLowerCase().includes(searchTerm.toLowerCase());
-          const matchesStatus = statusFilter === "All" || listing.status === statusFilter;
-          return matchesSearch && matchesStatus;
+          const nameEn = listing.name_en || ""; 
+          const matchesSearch = nameEn.toLowerCase().includes(searchTerm.toLowerCase());
+          // const matchesStatus = statusFilter === "All" || listing.status === statusFilter; // Removed status match
+          return matchesSearch; // Only match search term now
       });
   }
   
-  // Client-side sorting (Simplified)
+  // Client-side sorting - Simplified to only name_en
   const sortedListings = [...filteredListings].sort((a, b) => {
-    const fieldA = a[sortField];
+    const fieldA = a[sortField]; // Should only be name_en now
     const fieldB = b[sortField];
     
-    // Handle null/undefined comparisons
     if (fieldA == null && fieldB == null) return 0;
     if (fieldA == null) return sortDirection === "asc" ? -1 : 1;
     if (fieldB == null) return sortDirection === "asc" ? 1 : -1;
     
-    // Sort strings (status, potentially location later)
-    if (typeof fieldA === "string" && typeof fieldB === "string") {
-      // Handle date strings separately for correct sorting
-      if (sortField === 'created_at' || sortField === 'updated_at') {
-        try {
-          const dateA = new Date(fieldA).getTime();
-          const dateB = new Date(fieldB).getTime();
-          return sortDirection === "asc" ? dateA - dateB : dateB - dateA;
-        } catch (e) {
-          // Fallback to string compare if date parsing fails
-          return sortDirection === "asc" ? fieldA.localeCompare(fieldB) : fieldB.localeCompare(fieldA);
-        }
-      } else {
-        // Standard string compare for other fields (like status)
-        return sortDirection === "asc" ? fieldA.localeCompare(fieldB) : fieldB.localeCompare(fieldA);
-      }
-    }
-    
-    // Default case (shouldn't hit often with current fields)
-    return 0; 
+    // String comparison for name_en
+    return sortDirection === "asc" ? String(fieldA).localeCompare(String(fieldB)) : String(fieldB).localeCompare(String(fieldA));
   });
 
   // Redirect if not authenticated
@@ -178,6 +175,7 @@ export default function ListingsPage() {
   return (
     <Shell>
       <div className="space-y-6">
+        {/* Header and buttons */}
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold">Listings</h1>
@@ -186,24 +184,12 @@ export default function ListingsPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              className="btn btn-outline btn-sm inline-flex items-center gap-1"
-              onClick={() => refresh()}
-              disabled={loading}
-            >
-              {loading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="h-4 w-4" />
-              )}
+            <button className="btn btn-outline btn-sm inline-flex items-center gap-1" onClick={() => refresh()} disabled={loading}>
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
               <span className="sr-only">Refresh</span>
             </button>
-            <Link 
-              href="/dashboard/listings/new" 
-              className="btn btn-primary inline-flex items-center gap-1"
-            >
-              <Plus className="h-4 w-4" />
-              Add Listing
+            <Link href="/dashboard/listings/new" className="btn btn-primary inline-flex items-center gap-1">
+              <Plus className="h-4 w-4" /> Add Listing
             </Link>
           </div>
         </div>
@@ -211,53 +197,37 @@ export default function ListingsPage() {
         {/* Error message display */}
         {errorMessage && (
           <div className="bg-destructive/10 text-destructive p-4 rounded-lg flex items-center gap-2">
-            <AlertCircle className="h-5 w-5" />
-            <p>{errorMessage}</p>
-            <button 
-              className="ml-auto hover:text-destructive/80"
-              onClick={() => setErrorMessage(null)}
-            >
-              &times;
-            </button>
+            <AlertCircle className="h-5 w-5" /> <p>{errorMessage}</p>
+            <button className="ml-auto hover:text-destructive/80" onClick={() => setErrorMessage(null)}>&times;</button>
           </div>
         )}
 
         {/* Loading state */}
         {loading && (
           <div className="flex justify-center items-center py-12">
-            <Loader2 className="h-8 w-8 animate-spin text-primary" />
-            <span className="ml-2">Loading listings...</span>
+            <Loader2 className="h-8 w-8 animate-spin text-primary" /> <span className="ml-2">Loading listings...</span>
           </div>
         )}
 
         {!loading && (
           <>
+            {/* Search and Filters Card - Removed Status Filter */}
             <div className="card">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="relative max-w-sm grow">
                   <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                   <input
                     type="search"
-                    placeholder="Search by location..."
+                    placeholder="Search by name..."
                     className="input-search w-full py-2 pl-8"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                   />
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <select
-                    className="input-select min-w-28"
-                    value={statusFilter}
-                    onChange={(e) => setStatusFilter(e.target.value)}
-                  >
-                    <option value="All">All Statuses</option>
-                    <option value="Published">Published</option>
-                    <option value="Draft">Draft</option>
-                    <option value="Archived">Archived</option>
-                  </select>
+                  {/* Status Filter Removed */}
                   <button className="btn btn-outline inline-flex items-center gap-1 py-2">
-                    <Sliders className="h-4 w-4" />
-                    <span className="hidden sm:inline">Filters</span>
+                    <Sliders className="h-4 w-4" /> <span className="hidden sm:inline">Filters</span>
                   </button>
                 </div>
               </div>
@@ -270,26 +240,17 @@ export default function ListingsPage() {
                   <h3 className="text-xl font-bold mb-4">Confirm Deletion</h3>
                   <p className="mb-6">Are you sure you want to delete this listing? This action cannot be undone.</p>
                   <div className="flex justify-end gap-2">
-                    <button 
-                      className="btn btn-outline"
-                      onClick={cancelDelete}
-                    >
-                      Cancel
-                    </button>
-                    <button 
-                      className="btn btn-destructive"
-                      onClick={() => showDeleteConfirm.id && handleDelete(showDeleteConfirm.id)}
-                    >
-                      Delete
-                    </button>
+                    <button className="btn btn-outline" onClick={cancelDelete}>Cancel</button>
+                    <button className="btn btn-destructive" onClick={() => showDeleteConfirm.id && handleDelete(showDeleteConfirm.id)}>Delete</button>
                   </div>
                 </div>
               </div>
             )}
 
+            {/* Listings Table Card */}
             <div className="card overflow-hidden p-0">
               {sortedListings.length === 0 ? (
-                <div className="p-8 text-center">
+                 <div className="p-8 text-center">
                   <p className="text-muted-foreground">No listings found. Create your first listing!</p>
                   <Link 
                     href="/dashboard/listings/new" 
@@ -306,28 +267,14 @@ export default function ListingsPage() {
                       <tr className="border-b text-left text-xs font-medium text-muted-foreground">
                         <th className="px-4 py-3 font-medium">
                           <button
-                            onClick={() => handleSort("location")}
+                            onClick={() => handleSort("name_en")} 
                             className="inline-flex items-center gap-1"
                           >
-                            Location <ArrowUpDown className="h-3 w-3" />
+                            Name <ArrowUpDown className="h-3 w-3" />
                           </button>
                         </th>
-                        <th className="px-4 py-3 font-medium">
-                          <button
-                            onClick={() => handleSort("status")}
-                            className="inline-flex items-center gap-1"
-                          >
-                            Status <ArrowUpDown className="h-3 w-3" />
-                          </button>
-                        </th>
-                        <th className="px-4 py-3 font-medium">
-                          <button
-                            onClick={() => handleSort("updated_at")}
-                            className="inline-flex items-center gap-1"
-                          >
-                            Last Updated <ArrowUpDown className="h-3 w-3" />
-                          </button>
-                        </th>
+                        {/* Status Header Removed */} 
+                        {/* Last Updated Header Removed (for now) */}
                         <th className="px-4 py-3 font-medium text-right">Actions</th>
                       </tr>
                     </thead>
@@ -336,26 +283,17 @@ export default function ListingsPage() {
                         <tr key={listing.id} className="hover:bg-muted/50">
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-3">
-                              <img
-                                src={listing.thumbnail || listing.image_url || "https://placehold.co/100x60/png"}
-                                alt={listing.location || `Listing ${listing.id.substring(0,6)}`}
-                                className="h-10 w-16 rounded object-cover"
-                              />
+                              {/* Image can be added back later if needed */}
                               <div>
-                                <div className="font-medium">{listing.location || `Listing ${listing.id.substring(0,6)}`}</div>
+                                <div className="font-medium">{listing.name_en || `Listing ${listing.id.substring(0,6)}`}</div> 
                               </div>
                             </div>
                           </td>
-                          <td className="px-4 py-3 text-sm">
-                            <span className={`badge ${listing.status === "Published" ? "badge-success" : "badge-secondary"}`}>
-                              {listing.status}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-sm">
-                            {formatDate(listing.updated_at)}
-                          </td>
+                          {/* Status Cell Removed */}
+                          {/* Last Updated Cell Removed (for now) */}
                           <td className="px-4 py-3 text-right">
-                            <div className="flex justify-end gap-2">
+                             {/* Action buttons */}
+                             <div className="flex justify-end gap-2">
                               <button 
                                 className="btn-icon btn-sm" 
                                 onClick={() => handleView(listing.id)}

@@ -25,6 +25,11 @@ interface UseSupabaseOptions {
   onError?: (error: PostgrestError | TimeoutError) => void; // Allow either error type
 }
 
+// Add selectQuery option
+interface UseSupabaseTableOptions extends UseSupabaseOptions {
+  selectQuery?: string;
+}
+
 interface UseSupabaseTableResult {
   data: SupabaseData[] | null;
   status: SupabaseStatus;
@@ -42,7 +47,7 @@ interface UseSupabaseTableResult {
  */
 export function useSupabaseTable(
   tableName: string,
-  options: UseSupabaseOptions = {}
+  options: UseSupabaseTableOptions = {}
 ): UseSupabaseTableResult {
   const { supabase } = useAuth(); // Get supabase client from context
   const [data, setData] = useState<SupabaseData[] | null>(null);
@@ -65,12 +70,14 @@ export function useSupabaseTable(
     setError(null);
 
     try {
-      console.log(`[useSupabaseTable:${tableName}] refresh: Calling supabase.from(${tableName}).select('*') with ${QUERY_TIMEOUT_MS}ms timeout`);
+      // Use provided selectQuery or default to '*'
+      const query = options.selectQuery || '*';
+      console.log(`[useSupabaseTable:${tableName}] refresh: Calling supabase.from(${tableName}).select('${query}') with ${QUERY_TIMEOUT_MS}ms timeout`);
       
       // Create the query promise
       const queryPromise = supabase
         .from(tableName)
-        .select('*');
+        .select(query);
 
       // Create the timeout promise
       const timeoutPromise = new Promise((_, reject) =>
@@ -118,7 +125,7 @@ export function useSupabaseTable(
         options.onError(errorToSet);
       }
     }
-  }, [tableName, supabase]);
+  }, [tableName, supabase, options.selectQuery, options.onSuccess, options.onError]); // Add options dependencies
 
   const add = useCallback(async (insertData: SupabaseData) => {
     if (!supabase) return null; // Or throw error?
@@ -150,7 +157,7 @@ export function useSupabaseTable(
       }
       return null;
     }
-  }, [tableName, refresh, supabase]);
+  }, [tableName, refresh, supabase, options.onError]); // Add options.onError
 
   const update = useCallback(async (id: string | number, updateData: SupabaseData) => {
      if (!supabase) return;
@@ -180,7 +187,7 @@ export function useSupabaseTable(
         options.onError(pgError);
       }
     }
-  }, [tableName, refresh, supabase]);
+  }, [tableName, refresh, supabase, options.onSuccess, options.onError]); // Add options dependencies
 
   const remove = useCallback(async (id: string | number) => {
     if (!supabase) return;
@@ -209,7 +216,7 @@ export function useSupabaseTable(
         options.onError(pgError);
       }
     }
-  }, [tableName, refresh, supabase]);
+  }, [tableName, refresh, supabase, options.onSuccess, options.onError]); // Add options dependencies
 
   // Fetch data on initial mount
   useEffect(() => {
