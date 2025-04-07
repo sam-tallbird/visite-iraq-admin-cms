@@ -28,6 +28,29 @@ import { Switch } from "@/components/ui/switch";
 import { createClient } from "@/lib/supabase/client";
 import { Database } from "@/lib/database.types";
 
+// --- Add IRAQ_PROVINCES Constant ---
+const IRAQ_PROVINCES = [
+  { en: "Al Anbar", ar: "الأنبار" },
+  { en: "Babylon", ar: "بابل" },
+  { en: "Baghdad", ar: "بغداد" },
+  { en: "Basra", ar: "البصرة" },
+  { en: "Dhi Qar", ar: "ذي قار" },
+  { en: "Diyala", ar: "ديالى" },
+  { en: "Dohuk", ar: "دهوك" },
+  { en: "Erbil", ar: "أربيل" },
+  { en: "Karbala", ar: "كربلاء" },
+  { en: "Kirkuk", ar: "كركوك" },
+  { en: "Maysan", ar: "ميسان" },
+  { en: "Muthanna", ar: "المثنى" },
+  { en: "Najaf", ar: "النجف" },
+  { en: "Nineveh", ar: "نينوى" },
+  { en: "Qadisiyyah", ar: "القادسية" },
+  { en: "Saladin", ar: "صلاح الدين" },
+  { en: "Sulaymaniyah", ar: "السليمانية" },
+  { en: "Wasit", ar: "واسط" },
+];
+// --- End IRAQ_PROVINCES ---
+
 // --- NEW Interfaces based on Schema Dump ---
 interface Listing {
   id?: string;
@@ -168,6 +191,10 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
     google_place_id: null as string | null, // <-- Add state for place_id
     tags: "", // Array represented as comma-separated string
     listing_type: "",
+    // --- Add City fields ---
+    city_en: "",
+    city_ar: "",
+    // ---------------------
 
     // Listing Translations Fields (EN)
     name_en: "",
@@ -386,56 +413,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
   }, [listingStatus, translationsStatus, linksStatus]);
   // ----------------------------------------------------
 
-  // --- REVISED: Effect to fetch location translations and UPDATE FORM DATA --- 
-  useEffect(() => {
-    const fetchLocationTranslations = async (locId: string) => {
-      if (!supabase) return;
-      console.log(`%c[EditListingForm] Fetching location translations for location_id: ${locId}`, 'color: brown');
-      // Removed setLocationTranslationsLoading(true);
-      try {
-        const { data, error } = await supabase
-          .from('location_translations')
-          .select('language_code, name') // Only need name now
-          .eq('location_id', locId);
-
-        if (error) {
-          console.error("Error fetching location translations:", error);
-          // Optionally set an error state here
-          return; 
-        }
-        
-        console.log("[EditListingForm] Location translations received:", data);
-        const enTranslation = data?.find(t => t.language_code === 'en');
-        const arTranslation = data?.find(t => t.language_code === 'ar');
-        
-        // Directly update formData with fetched names
-        const fetchedNameEn = enTranslation?.name || null;
-        const fetchedNameAr = arTranslation?.name || null;
-        console.log(`[EditListingForm] Fetched location names: EN='${fetchedNameEn}', AR='${fetchedNameAr}'. Updating formData...`);
-        setFormData(prev => ({
-            ...prev,
-            location: fetchedNameEn ?? prev.location, // Update if fetched, otherwise keep existing
-            location_ar: fetchedNameAr ?? prev.location_ar // Update if fetched, otherwise keep existing
-        }));
-        
-      } catch (err) {
-        console.error("Unexpected error fetching location translations:", err);
-      } 
-      // Removed finally block with setLocationTranslationsLoading(false);
-    };
-
-    // Only fetch if we have a location_id from the main listing data
-    if (listing && listing.location_id) {
-        console.log(`[LocationFetchEffect] Found location_id: ${listing.location_id}, calling fetchLocationTranslations.`);
-        fetchLocationTranslations(listing.location_id);
-    } else {
-        console.log(`[LocationFetchEffect] No listing or listing.location_id found.`);
-    }
-  // Depend on the listing object (specifically listing.location_id) and supabase client
-  }, [listing, supabase]);
-  // --------------------------------------------------------------------------
-
-  // --- REVISED Effect to Populate Form Data on Initial Load --- 
+  // --- REVISED: Effect to Populate Form Data on Initial Load --- 
   useEffect(() => {
     console.log(`%c[FormPopulationEffect] Running`, 'color: green');
     console.log("[FormPopulationEffect] Dependencies:", {
@@ -446,116 +424,238 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
         allCategoryLinksExist: !!allCategoryLinks
     });
 
-    // Populate only if form hasn't been populated AND core listing data exists
-    // REMOVED dependency on fetchedLocationNameEn/Ar
-    if (!hasPopulatedForm && listing && allTranslations && allCategoryLinks) {
-       console.log('[FormPopulationEffect] Conditions met (not populated yet, core data exists), attempting to populate...');
+    // --- Fetch Location Translations within this effect ---
+    const fetchLocationDataAndPopulate = async (locId: string) => {
+      console.log(`[FormPopulationEffect] Fetching location translations for location_id: ${locId}`);
+      let locationDataEn: any = null;
+      let locationDataAr: any = null;
+      try {
+        // Ensure supabase client is available
+        if (!supabase) throw new Error("Supabase client not available for fetching location.");
 
-       // Re-find translations and links directly within this effect
-       const en = allTranslations.find(t => t.listing_id === listingId && t.language_code === 'en');
-       const ar = allTranslations.find(t => t.listing_id === listingId && t.language_code === 'ar');
-       const links = allCategoryLinks.filter(link => link.listing_id === listingId);
-       const currentCategoryIds = links.map(link => link.category_id);
-       
-       // Check if translations and links were actually found
-       if (en && ar && links) {
-          console.log('[FormPopulationEffect] Found en, ar, links. Preparing initialFormData...');
-          const joinArray = (arr: string[] | null | undefined): string => arr ? arr.join(', ') : '';
+        const { data: locTransData, error: locTransError } = await supabase
+          .from('location_translations')
+          .select('language_code, name, address, city') // Fetch city and address
+          .eq('location_id', locId);
+        
+        if (locTransError) throw locTransError;
 
-          // --- Reconstruct initialFormData (use listing.location for initial location) --- 
-          const initialFormData = {
-            // Listing fields - Use listing.location initially, location effect will update later if needed
-            location: listing.location || "", // Use listing.location as initial value
-            location_ar: "", // Start with empty Arabic location
-            google_maps_link: listing.google_maps_link || "",
-            latitude: listing.latitude?.toString() || "",
-            longitude: listing.longitude?.toString() || "",
-            location_id: listing.location_id || null,
-            google_place_id: (listing as any).google_place_id || null,
-            tags: joinArray(listing.tags),
-            listing_type: (listing as Listing).listing_type || "",
-            
-             // English Translation fields (using listing_translations)
-            name_en: en.name || "",
-            description_en: en.description || "",
-            opening_hours_en: en.opening_hours || "",
-            popular_stores_en: joinArray(en.popular_stores),
-            entertainment_en: joinArray(en.entertainment),
-            dining_options_en: joinArray(en.dining_options),
-            special_services_en: joinArray(en.special_services),
-            nearby_attractions_en: joinArray(en.nearby_attractions),
-            parking_info_en: en.parking_info || "",
-            cuisine_type_en: en.cuisine_type || "",
-            story_behind_en: en.story_behind || "",
-            menu_highlights_en: joinArray(en.menu_highlights),
-            price_range_en: en.price_range || "",
-            dietary_options_en: joinArray(en.dietary_options),
-            reservation_info_en: en.reservation_info || "",
-            seating_options_en: joinArray(en.seating_options),
-            special_features_en: joinArray(en.special_features),
-            historical_significance_en: en.historical_significance || "",
-            entry_fee_en: en.entry_fee || "",
-            best_time_to_visit_en: en.best_time_to_visit || "",
-            tour_guide_availability_en: en.tour_guide_availability || "",
-            tips_en: en.tips || "",
-            activities_en: joinArray(en.activities),
-            facilities_en: joinArray(en.facilities),
-            safety_tips_en: en.safety_tips || "",
-            duration_en: en.duration || "",
-            highlights_en: joinArray(en.highlights),
-            religious_significance_en: en.religious_significance || "",
-            entry_rules_en: en.entry_rules || "",
-            slug_en: en.slug || "",
+        locationDataEn = locTransData?.find(t => t.language_code === 'en');
+        locationDataAr = locTransData?.find(t => t.language_code === 'ar');
+        console.log('[FormPopulationEffect] Fetched location data:', { locationDataEn, locationDataAr });
 
-            // Arabic Translation fields (using 'ar')
-            name_ar: ar.name || "",
-            description_ar: ar.description || "",
-            opening_hours_ar: ar.opening_hours || "",
-            popular_stores_ar: joinArray(ar.popular_stores),
-            entertainment_ar: joinArray(ar.entertainment),
-            dining_options_ar: joinArray(ar.dining_options),
-            special_services_ar: joinArray(ar.special_services),
-            nearby_attractions_ar: joinArray(ar.nearby_attractions),
-            parking_info_ar: ar.parking_info || "",
-            cuisine_type_ar: ar.cuisine_type || "",
-            story_behind_ar: ar.story_behind || "",
-            menu_highlights_ar: joinArray(ar.menu_highlights),
-            price_range_ar: ar.price_range || "",
-            dietary_options_ar: joinArray(ar.dietary_options),
-            reservation_info_ar: ar.reservation_info || "",
-            seating_options_ar: joinArray(ar.seating_options),
-            special_features_ar: joinArray(ar.special_features),
-            historical_significance_ar: ar.historical_significance || "",
-            entry_fee_ar: ar.entry_fee || "",
-            best_time_to_visit_ar: ar.best_time_to_visit || "",
-            tour_guide_availability_ar: ar.tour_guide_availability || "",
-            tips_ar: ar.tips || "",
-            activities_ar: joinArray(ar.activities),
-            facilities_ar: joinArray(ar.facilities),
-            safety_tips_ar: ar.safety_tips || "",
-            duration_ar: ar.duration || "",
-            highlights_ar: joinArray(ar.highlights),
-            religious_significance_ar: ar.religious_significance || "",
-            entry_rules_ar: ar.entry_rules || "",
-            slug_ar: ar.slug || "",
+      } catch (err) {
+        console.error("Error fetching location translations within population effect:", err);
+        // Decide if you want to proceed without location data or show error
+      }
+      
+      // --- Now Populate the form using listing, listing translations, and fetched location data ---
+      if (listing && allTranslations && allCategoryLinks) {
+          const en = allTranslations.find(t => t.listing_id === listingId && t.language_code === 'en');
+          const ar = allTranslations.find(t => t.listing_id === listingId && t.language_code === 'ar');
+          const links = allCategoryLinks.filter(link => link.listing_id === listingId);
+          // Ensure category IDs are strings to match the state type
+          const currentCategoryIds = links.map(link => String(link.category_id)); 
+          
+           if (en && ar && links) {
+                console.log('[FormPopulationEffect] Found en, ar, links. Preparing initialFormData...');
+                const joinArray = (arr: string[] | null | undefined): string => arr ? arr.join(', ') : '';
+      
+                const initialFormData = {
+                    // Core Listing Fields
+                    location: locationDataEn?.address || listing.location || "", // Use fetched EN address, fallback to listing.location
+                    location_ar: locationDataAr?.address || "", // Use fetched AR address
+                    google_maps_link: listing.google_maps_link || "",
+                    latitude: listing.latitude?.toString() || "",
+                    longitude: listing.longitude?.toString() || "",
+                    location_id: listing.location_id || null,
+                    google_place_id: (listing as any).google_place_id || null,
+                    tags: joinArray(listing.tags),
+                    listing_type: (listing as Listing).listing_type || "",
+                    city_en: locationDataEn?.city || "", // <<< Use fetched EN city
+                    city_ar: locationDataAr?.city || "", // <<< Use fetched AR city
+                    
+                    // English Listing Translation fields
+                    name_en: en.name || "",
+                    description_en: en.description || "",
+                    opening_hours_en: en.opening_hours || "",
+                    popular_stores_en: joinArray(en.popular_stores),
+                    entertainment_en: joinArray(en.entertainment),
+                    dining_options_en: joinArray(en.dining_options),
+                    special_services_en: joinArray(en.special_services),
+                    nearby_attractions_en: joinArray(en.nearby_attractions),
+                    parking_info_en: en.parking_info || "",
+                    cuisine_type_en: en.cuisine_type || "",
+                    story_behind_en: en.story_behind || "",
+                    menu_highlights_en: joinArray(en.menu_highlights),
+                    price_range_en: en.price_range || "",
+                    dietary_options_en: joinArray(en.dietary_options),
+                    reservation_info_en: en.reservation_info || "",
+                    seating_options_en: joinArray(en.seating_options),
+                    special_features_en: joinArray(en.special_features),
+                    historical_significance_en: en.historical_significance || "",
+                    entry_fee_en: en.entry_fee || "",
+                    best_time_to_visit_en: en.best_time_to_visit || "",
+                    tour_guide_availability_en: en.tour_guide_availability || "",
+                    tips_en: en.tips || "",
+                    activities_en: joinArray(en.activities),
+                    facilities_en: joinArray(en.facilities),
+                    safety_tips_en: en.safety_tips || "",
+                    duration_en: en.duration || "",
+                    highlights_en: joinArray(en.highlights),
+                    religious_significance_en: en.religious_significance || "",
+                    entry_rules_en: en.entry_rules || "",
+                    slug_en: en.slug || "",
 
-            // Category IDs
-            categoryIds: currentCategoryIds,
-          };
-          // --- End Reconstruction ---
+                    // Arabic Listing Translation fields
+                    name_ar: ar.name || "",
+                    description_ar: ar.description || "",
+                    opening_hours_ar: ar.opening_hours || "",
+                    popular_stores_ar: joinArray(ar.popular_stores),
+                    entertainment_ar: joinArray(ar.entertainment),
+                    dining_options_ar: joinArray(ar.dining_options),
+                    special_services_ar: joinArray(ar.special_services),
+                    nearby_attractions_ar: joinArray(ar.nearby_attractions),
+                    parking_info_ar: ar.parking_info || "",
+                    cuisine_type_ar: ar.cuisine_type || "",
+                    story_behind_ar: ar.story_behind || "",
+                    menu_highlights_ar: joinArray(ar.menu_highlights),
+                    price_range_ar: ar.price_range || "",
+                    dietary_options_ar: joinArray(ar.dietary_options),
+                    reservation_info_ar: ar.reservation_info || "",
+                    seating_options_ar: joinArray(ar.seating_options),
+                    special_features_ar: joinArray(ar.special_features),
+                    historical_significance_ar: ar.historical_significance || "",
+                    entry_fee_ar: ar.entry_fee || "",
+                    best_time_to_visit_ar: ar.best_time_to_visit || "",
+                    tour_guide_availability_ar: ar.tour_guide_availability || "",
+                    tips_ar: ar.tips || "",
+                    activities_ar: joinArray(ar.activities),
+                    facilities_ar: joinArray(ar.facilities),
+                    safety_tips_ar: ar.safety_tips || "",
+                    duration_ar: ar.duration || "",
+                    highlights_ar: joinArray(ar.highlights),
+                    religious_significance_ar: ar.religious_significance || "",
+                    entry_rules_ar: ar.entry_rules || "",
+                    slug_ar: ar.slug || "",
+                    
+                    // Category IDs
+                    categoryIds: currentCategoryIds,
+                };
+                console.log(`%c[FormPopulationEffect] Calling setFormData with populated data (including location details)`, "color: orange");
+                setFormData(initialFormData); 
+                setHasPopulatedForm(true); // Set flag after successful population
+           } else {
+              console.warn('[FormPopulationEffect] Could not find required EN/AR translations or links. Form data not set.');
+           }
+      } else {
+           console.log('[FormPopulationEffect] Base listing/translations/links not ready yet.');
+      }
+    };
+    // --- End of inner function fetchLocationDataAndPopulate ---
 
-          console.log(`[FormPopulationEffect] Prepared initialFormData. Location AR set to: '${initialFormData.location_ar}' (from fetched '${initialFormData.location_ar}')`);
-          console.log(`%c[FormPopulationEffect] Calling setFormData`, "color: orange");
-          setFormData(initialFormData);
-          setHasPopulatedForm(true); // <-- Set flag HERE after successful population
-       } else {
-          console.warn('[FormPopulationEffect] Could not find required EN/AR translations or links even though base listing is present. Form data not set.');
-       }
+    // Populate only if form hasn't been populated AND core listing data exists AND listing has a location_id
+    if (!isLoadingCoreData && !hasPopulatedForm && listing && listing.location_id) {
+       console.log('[FormPopulationEffect] Conditions met, calling fetchLocationDataAndPopulate...');
+       fetchLocationDataAndPopulate(listing.location_id);
     } else {
-       console.log('[FormPopulationEffect] Conditions not met for population (missing data, already populated, or waiting for core data)');
+       console.log('[FormPopulationEffect] Conditions not met for population (core data loading, already populated, no listing, or no location_id)');
+       // If core data is loaded, listing exists, but there's no location_id, still mark as populated to avoid loops
+       if(!isLoadingCoreData && !hasPopulatedForm && listing && !listing.location_id){ 
+           console.warn('[FormPopulationEffect] Listing loaded but has no location_id. Marking as populated.');
+           // We still need to populate the form with whatever data we *do* have
+           const en = allTranslations?.find(t => t.listing_id === listingId && t.language_code === 'en');
+           const ar = allTranslations?.find(t => t.listing_id === listingId && t.language_code === 'ar');
+           const links = allCategoryLinks?.filter(link => link.listing_id === listingId);
+           const currentCategoryIds = links?.map(link => String(link.category_id)) || [];
+           if (en && ar && links) {
+                console.log('[FormPopulationEffect] Populating form WITHOUT location details...');
+                const joinArray = (arr: string[] | null | undefined): string => arr ? arr.join(', ') : '';
+                const initialFormData = { /* ... (construct object like above but without city/address or using fallbacks) ... */ 
+                    location: listing.location || "",
+                    location_ar: "", 
+                    google_maps_link: listing.google_maps_link || "",
+                    latitude: listing.latitude?.toString() || "",
+                    longitude: listing.longitude?.toString() || "",
+                    location_id: null, // No location_id
+                    google_place_id: null, // No google_place_id
+                    tags: joinArray(listing.tags),
+                    listing_type: (listing as Listing).listing_type || "",
+                    city_en: "", // No city data
+                    city_ar: "", // No city data
+                    // --- Fill remaining fields from en/ar translations and links ---
+                    name_en: en.name || "",
+                    description_en: en.description || "",
+                    opening_hours_en: en.opening_hours || "",
+                    popular_stores_en: joinArray(en.popular_stores),
+                    entertainment_en: joinArray(en.entertainment),
+                    dining_options_en: joinArray(en.dining_options),
+                    special_services_en: joinArray(en.special_services),
+                    nearby_attractions_en: joinArray(en.nearby_attractions),
+                    parking_info_en: en.parking_info || "",
+                    cuisine_type_en: en.cuisine_type || "",
+                    story_behind_en: en.story_behind || "",
+                    menu_highlights_en: joinArray(en.menu_highlights),
+                    price_range_en: en.price_range || "",
+                    dietary_options_en: joinArray(en.dietary_options),
+                    reservation_info_en: en.reservation_info || "",
+                    seating_options_en: joinArray(en.seating_options),
+                    special_features_en: joinArray(en.special_features),
+                    historical_significance_en: en.historical_significance || "",
+                    entry_fee_en: en.entry_fee || "",
+                    best_time_to_visit_en: en.best_time_to_visit || "",
+                    tour_guide_availability_en: en.tour_guide_availability || "",
+                    tips_en: en.tips || "",
+                    activities_en: joinArray(en.activities),
+                    facilities_en: joinArray(en.facilities),
+                    safety_tips_en: en.safety_tips || "",
+                    duration_en: en.duration || "",
+                    highlights_en: joinArray(en.highlights),
+                    religious_significance_en: en.religious_significance || "",
+                    entry_rules_en: en.entry_rules || "",
+                    slug_en: en.slug || "",
+                    name_ar: ar.name || "",
+                    description_ar: ar.description || "",
+                    opening_hours_ar: ar.opening_hours || "",
+                    popular_stores_ar: joinArray(ar.popular_stores),
+                    entertainment_ar: joinArray(ar.entertainment),
+                    dining_options_ar: joinArray(ar.dining_options),
+                    special_services_ar: joinArray(ar.special_services),
+                    nearby_attractions_ar: joinArray(ar.nearby_attractions),
+                    parking_info_ar: ar.parking_info || "",
+                    cuisine_type_ar: ar.cuisine_type || "",
+                    story_behind_ar: ar.story_behind || "",
+                    menu_highlights_ar: joinArray(ar.menu_highlights),
+                    price_range_ar: ar.price_range || "",
+                    dietary_options_ar: joinArray(ar.dietary_options),
+                    reservation_info_ar: ar.reservation_info || "",
+                    seating_options_ar: joinArray(ar.seating_options),
+                    special_features_ar: joinArray(ar.special_features),
+                    historical_significance_ar: ar.historical_significance || "",
+                    entry_fee_ar: ar.entry_fee || "",
+                    best_time_to_visit_ar: ar.best_time_to_visit || "",
+                    tour_guide_availability_ar: ar.tour_guide_availability || "",
+                    tips_ar: ar.tips || "",
+                    activities_ar: joinArray(ar.activities),
+                    facilities_ar: joinArray(ar.facilities),
+                    safety_tips_ar: ar.safety_tips || "",
+                    duration_ar: ar.duration || "",
+                    highlights_ar: joinArray(ar.highlights),
+                    religious_significance_ar: ar.religious_significance || "",
+                    entry_rules_ar: ar.entry_rules || "",
+                    slug_ar: ar.slug || "",
+                    categoryIds: currentCategoryIds,
+                };
+                setFormData(initialFormData);
+                setHasPopulatedForm(true); // Still mark as populated
+           } else {
+               console.warn('[FormPopulationEffect] Could not find EN/AR translations or links even when listing exists without location_id.');
+           }
+       }
     }
-  // Depend only on core data and the populated flag
-  }, [listing, allTranslations, allCategoryLinks, hasPopulatedForm, listingId]); // Removed fetchedLocationNameEn/Ar, added listingId
+  // Depend on core data loading state, populated flag, and the data itself
+  }, [isLoadingCoreData, hasPopulatedForm, listing, allTranslations, allCategoryLinks, listingId, supabase]); 
+  // --------------------------------------------------------------------------
 
   // --- Fetch Available Collections & Existing Associations ---
   useEffect(() => {
@@ -736,9 +836,12 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
     };
 
     // 2. Location Translation Fields (for the separate location entry)
+    // UPDATED to match backend API expectations
     const locationTranslationPayload = {
-        name_en: formData.location,       // The English Address from the form
-        name_ar: formData.location_ar,    // The Arabic Address from the form
+        address_en: formData.location,       // Use address_en key for English Address
+        address_ar: formData.location_ar,    // Use address_ar key for Arabic Address
+        city_en: formData.city_en,          // Add English City
+        city_ar: formData.city_ar,          // Add Arabic City
         location_id: formData.location_id // Pass existing location_id if available
     };
 
@@ -982,6 +1085,71 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                     <Label htmlFor="location">Location Name / Address (English)</Label>
                     <Textarea id="location" name="location" value={formData.location} onChange={handleChange} placeholder="e.g., Main Street, Downtown" />
                 </div>
+
+                 {/* --- START: City Dropdowns --- */}
+                 {/* City (English) */}
+                 <div className="space-y-2">
+                    <Label htmlFor="city_en">City (English) *</Label>
+                    <Select
+                        name="city_en"
+                        required
+                        value={formData.city_en}
+                        // === START Linked Logic ===
+                        onValueChange={(value) => {
+                            const matchingProvince = IRAQ_PROVINCES.find(p => p.en === value);
+                            setFormData((prev) => ({ 
+                                ...prev, 
+                                city_en: value, 
+                                city_ar: matchingProvince ? matchingProvince.ar : '' // Update Arabic city too
+                            }));
+                        }}
+                        // === END Linked Logic ===
+                    >
+                        <SelectTrigger id="city_en">
+                            <SelectValue placeholder="Select City (English)" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {IRAQ_PROVINCES.map((province) => (
+                                <SelectItem key={province.en} value={province.en}>
+                                    {province.en}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                 </div>
+
+                 {/* City (Arabic) */}
+                 <div className="space-y-2">
+                     <Label htmlFor="city_ar">City (Arabic) *</Label>
+                     <Select
+                         name="city_ar"
+                         required
+                         value={formData.city_ar}
+                         // === START Linked Logic ===
+                         onValueChange={(value) => {
+                             const matchingProvince = IRAQ_PROVINCES.find(p => p.ar === value);
+                             setFormData((prev) => ({ 
+                                 ...prev, 
+                                 city_ar: value, 
+                                 city_en: matchingProvince ? matchingProvince.en : '' // Update English city too
+                             }));
+                         }}
+                         // === END Linked Logic ===
+                         dir="rtl"
+                     >
+                         <SelectTrigger id="city_ar">
+                             <SelectValue placeholder="اختر المدينة (عربي)" />
+                         </SelectTrigger>
+                         <SelectContent dir="rtl">
+                             {IRAQ_PROVINCES.map((province) => (
+                                 <SelectItem key={province.ar} value={province.ar}>
+                                     {province.ar}
+                                 </SelectItem>
+                             ))}
+                         </SelectContent>
+                     </Select>
+                 </div>
+                 {/* --- END: City Dropdowns --- */}
 
                  {/* Google Maps Link + Fetch Button */}
                  <div className="space-y-2">

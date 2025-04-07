@@ -18,6 +18,10 @@ interface ListingPutPayload {
         name_en: string | null;
         name_ar: string | null;
         location_id: string | null; // Existing ID if available
+        address_en?: string | null;
+        address_ar?: string | null;
+        city_en?: string | null;
+        city_ar?: string | null;
     };
     listingTranslations: Array<{ // Listing specific translations
         language_code: 'en' | 'ar';
@@ -119,28 +123,35 @@ export async function PUT(
             console.log(`[API PUT /api/listings/${listingId}] Location ID after place_id upsert: ${locationIdToLink}`);
         }
         
-        // If we have a location ID (either existing or from upsert) and names, upsert translations
-        if (locationIdToLink && (locationTranslations.name_en || locationTranslations.name_ar)) {
+        // If we have a location ID (either existing or from upsert) and address/city data, upsert translations
+        if (locationIdToLink && (locationTranslations.address_en || locationTranslations.address_ar || locationTranslations.city_en || locationTranslations.city_ar)) {
             console.log(`[API PUT /api/listings/${listingId}] Upserting location translations for location ID: ${locationIdToLink}`);
             const locationTranslationsToUpsert = [];
-            if (locationTranslations.name_en) {
+            
+            // Upsert English location translation
+            if (locationTranslations.address_en || locationTranslations.city_en) { // Check if either EN field exists
                 locationTranslationsToUpsert.push({
                     location_id: locationIdToLink,
-                    language_code: 'en', 
-                    name: locationTranslations.name_en,
-                    address: locationTranslations.name_en // Use name as address for now
+                    language_code: 'en',
+                    address: locationTranslations.address_en || null, // Use address_en
+                    city: locationTranslations.city_en || null,       // Use city_en
+                    name: locationTranslations.address_en || locationTranslations.city_en || "Location EN" // Use address or city as name, fallback
                 });
             }
-            if (locationTranslations.name_ar) {
+            
+            // Upsert Arabic location translation
+            if (locationTranslations.address_ar || locationTranslations.city_ar) { // Check if either AR field exists
                 locationTranslationsToUpsert.push({
                     location_id: locationIdToLink,
                     language_code: 'ar',
-                    name: locationTranslations.name_ar,
-                    address: locationTranslations.name_ar // Use name as address for now
+                    address: locationTranslations.address_ar || null, // Use address_ar
+                    city: locationTranslations.city_ar || null,       // Use city_ar
+                    name: locationTranslations.address_ar || locationTranslations.city_ar || "Location AR" // Use address or city as name, fallback
                 });
             }
 
             if (locationTranslationsToUpsert.length > 0) {
+                 console.log(`[API PUT /api/listings/${listingId}] Location translations to upsert:`, JSON.stringify(locationTranslationsToUpsert, null, 2)); // Added log
                  const { error: locTransError } = await supabase
                     .from('location_translations')
                     .upsert(locationTranslationsToUpsert, { onConflict: 'location_id, language_code' });
@@ -153,7 +164,7 @@ export async function PUT(
                  }
             }
         } else {
-             console.log(`[API PUT /api/listings/${listingId}] Skipping location translations upsert (no ID or no names provided).`);
+             console.log(`[API PUT /api/listings/${listingId}] Skipping location translations upsert (no ID or no address/city data provided).`);
         }
 
         // --- 2. Update Main Listing Table ---
