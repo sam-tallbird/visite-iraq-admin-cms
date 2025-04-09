@@ -1009,7 +1009,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
         cuisine_type: formData.cuisine_type_en,
         story_behind: formData.story_behind_en,
         menu_highlights: formData.menu_highlights_en,
-        price_range: priceRangeNumberToString(formData.price_range_en), // Use converter
+        price_range: formData.price_range_en === 0 ? null : formData.price_range_en, // Send number directly, or null if 0
         dietary_options: formData.dietary_options_en,
       
         special_features: formData.special_features_en,
@@ -1041,7 +1041,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
         cuisine_type: formData.cuisine_type_ar,
         story_behind: formData.story_behind_ar,
         menu_highlights: formData.menu_highlights_ar,
-        price_range: priceRangeNumberToString(formData.price_range_ar), // Use converter
+        price_range: formData.price_range_ar === 0 ? null : formData.price_range_ar, // Send number directly, or null if 0
         dietary_options: formData.dietary_options_ar,
       
         special_features: formData.special_features_ar,
