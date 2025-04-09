@@ -1,6 +1,8 @@
 {
-  "/dashboard/page": "app/dashboard/page.js",
-  "/dashboard/listings/[id]/edit/page": "app/dashboard/listings/[id]/edit/page.js",
+  "/dashboard/listings/page": "app/dashboard/listings/page.js",
   "/dashboard/listings/new/page": "app/dashboard/listings/new/page.js",
-  "/dashboard/listings/page": "app/dashboard/listings/page.js"
+  "/dashboard/listings/[id]/edit/page": "app/dashboard/listings/[id]/edit/page.js",
+  "/dashboard/collections/page": "app/dashboard/collections/page.js",
+  "/dashboard/categories/page": "app/dashboard/categories/page.js",
+  "/api/listings/[id]/route": "app/api/listings/[id]/route.js"
 }

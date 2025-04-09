@@ -30,6 +30,7 @@ import { createClient } from "@/lib/supabase/client";
 import { Database } from "@/lib/database.types";
 import { TagInput } from "@/components/ui/TagInput";
 import { OpeningHoursInput, OpeningHoursData } from './OpeningHoursInput';
+import { PriceRangeSelector } from '@/components/ui/PriceRangeSelector'; // ADD IMPORT
 
 // --- Add IRAQ_PROVINCES Constant ---
 const IRAQ_PROVINCES = [
@@ -53,6 +54,18 @@ const IRAQ_PROVINCES = [
   { en: "Wasit", ar: "واسط" },
 ];
 // --- End IRAQ_PROVINCES ---
+
+// +++ Add PARKING_OPTIONS Constant +++
+const PARKING_OPTIONS = [
+  { en: "Not Applicable", ar: "غير متاح" },
+  { en: "Street Parking", ar: "مواقف الشارع" },
+  { en: "Private Lot", ar: "مواقف خاصة" },
+  { en: "Valet Parking", ar: "خدمة صف السيارات" },
+  { en: "Garage Parking", ar: "مواقف في كراج" },
+  { en: "Paid Parking", ar: "مواقف مدفوعة" },
+  { en: "Free Parking", ar: "مواقف مجانية" },
+];
+// +++ End PARKING_OPTIONS +++
 
 // --- NEW Interfaces based on Schema Dump ---
 interface Listing {
@@ -152,6 +165,33 @@ const LISTING_TYPES = [
   { value: "Other", label: "Other" },
 ];
 
+// --- Helper Functions for Price Range Conversion ---
+const priceRangeStringToNumber = (priceString: string | null | undefined): number => {
+  if (!priceString) return 0;
+  switch (priceString) {
+    case '$': return 1;
+    case '$$': return 2;
+    case '$$$': return 3;
+    case '$$$$': return 4;
+    case '$$$$$': return 5;
+    default: return 0; // Return 0 for invalid strings or empty
+  }
+};
+
+const priceRangeNumberToString = (priceNumber: number | null | undefined): string | null => {
+  // Use 0 as the indicator for 'not set' in the state
+  if (priceNumber === null || priceNumber === undefined || priceNumber === 0) return null;
+  switch (priceNumber) {
+    case 1: return '$';
+    case 2: return '$$';
+    case 3: return '$$$';
+    case 4: return '$$$$';
+    case 5: return '$$$$$';
+    default: return null; // Return null for invalid numbers
+  }
+};
+// --------------------------------------------------
+
 export function EditListingForm({ listingId }: EditListingFormProps) {
   console.log(`%c[EditListingForm] Rendering/Mounting - ID: ${listingId}`, 'color: blue; font-weight: bold;'); 
   // --- Log listingId prop on render ---
@@ -181,7 +221,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
   const [collectionSelections, setCollectionSelections] = useState<CollectionSelectionState>({});
   const [collectionsLoading, setCollectionsLoading] = useState(true);
 
-  // Define the type for the form data state (UPDATED)
+  // Define the type for the form data state (REMOVE seating options)
   type FormDataState = {
     location: string;
     location_ar: string;
@@ -207,7 +247,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
     cuisine_type_en: string;
     story_behind_en: string;
     menu_highlights_en: string[]; 
-    price_range_en: string;
+    price_range_en: number; // <-- Changed to number
     dietary_options_en: string[]; 
     special_features_en: string[]; 
     historical_significance_en: string;
@@ -235,7 +275,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
     cuisine_type_ar: string;
     story_behind_ar: string;
     menu_highlights_ar: string[]; 
-    price_range_ar: string;
+    price_range_ar: number; // <-- Changed to number
     dietary_options_ar: string[]; 
     special_features_ar: string[]; 
     historical_significance_ar: string;
@@ -253,8 +293,6 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
     slug_ar: string;
     // Other
     categoryIds: string[];
-    seating_options_en: string[];
-    seating_options_ar: string[];
   };
 
   // --- Default Opening Hours Structure (ADDED/UPDATED) ---
@@ -269,7 +307,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
   };
   // -------------------------------------------------------
 
-  // Initial form state (REMOVE old fields)
+  // Initial form state (REMOVE seating options)
   const initialFormData: FormDataState = {
     location: "",
     location_ar: "",
@@ -293,9 +331,9 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
     parking_info_en: "",
     cuisine_type_en: "",
     story_behind_en: "",
-    menu_highlights_en: [], 
-    price_range_en: "",
-    dietary_options_en: [], 
+    menu_highlights_en: [],
+    price_range_en: 0, // <-- Initialized to 0
+    dietary_options_en: [],
     special_features_en: [], 
     historical_significance_en: "",
     entry_fee_en: "",
@@ -320,9 +358,9 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
     parking_info_ar: "",
     cuisine_type_ar: "",
     story_behind_ar: "",
-    menu_highlights_ar: [], 
-    price_range_ar: "",
-    dietary_options_ar: [], 
+    menu_highlights_ar: [],
+    price_range_ar: 0, // <-- Initialized to 0
+    dietary_options_ar: [],
     special_features_ar: [], 
     historical_significance_ar: "",
     entry_fee_ar: "",
@@ -338,8 +376,6 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
     entry_rules_ar: "",
     slug_ar: "",
     categoryIds: [],
-    seating_options_en: [],
-    seating_options_ar: [],
   };
 
   const [formData, setFormData] = useState<FormDataState>(initialFormData);
@@ -492,7 +528,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
   }, [listingStatus, translationsStatus, linksStatus]);
   // ----------------------------------------------------
 
-  // --- REVISED: Effect to Populate Form Data ONCE on Initial Load ---
+  // --- REVISED: Effect to Populate Form Data ONCE on Initial Load (REMOVE seating options) ---
   useEffect(() => {
     console.log(`%c[FormPopulationEffect - Revised] Running`, 'color: #007bff'); // Blue color
     console.log("[FormPopulationEffect - Revised] Dependencies:", {
@@ -641,7 +677,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
               cuisine_type_en: en.cuisine_type || "",
               story_behind_en: en.story_behind || "",
               menu_highlights_en: en.menu_highlights || [],
-              price_range_en: en.price_range || "",
+              price_range_en: typeof en.price_range === 'number' ? en.price_range : 0, // Directly use number, default to 0
               dietary_options_en: en.dietary_options || [],
               special_features_en: en.special_features || [],
               historical_significance_en: en.historical_significance || "",
@@ -669,7 +705,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
               cuisine_type_ar: ar.cuisine_type || "",
               story_behind_ar: ar.story_behind || "",
               menu_highlights_ar: ar.menu_highlights || [],
-              price_range_ar: ar.price_range || "",
+              price_range_ar: typeof ar.price_range === 'number' ? ar.price_range : (typeof en.price_range === 'number' ? en.price_range : 0),  // Directly use number, fallback to EN number if AR is null/invalid, else 0
               dietary_options_ar: ar.dietary_options || [],
               special_features_ar: ar.special_features || [],
               historical_significance_ar: ar.historical_significance || "",
@@ -687,8 +723,6 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
               slug_ar: ar.slug || "",
               // Category IDs
               categoryIds: currentCategoryIds,
-              seating_options_en: en?.seating_options || [],
-              seating_options_ar: ar?.seating_options || [],
             };
 
             console.log(`%c[FormPopulationEffect - Revised] Calling setFormData with fully populated data.`, "color: #28a745");
@@ -902,14 +936,41 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
   };
   // -------------------------------------------
   
+  // --- ADD NEW/UPDATED: Handler to synchronize price range (accepts number | null) ---
+  const handlePriceRangeChange = (value: number | null) => { // Accepts number OR null
+    console.log(`[handlePriceRangeChange] New value: ${value}`);
+    // Use 0 to represent null/unset in the state
+    const numericValue: number = value === null ? 0 : value;
+    setFormData((prev) => {
+      // Create the new state object explicitly typed
+      const newState: FormDataState = {
+         ...prev,
+         price_range_en: numericValue, // Use the guaranteed number
+         price_range_ar: numericValue, // Use the guaranteed number
+       };
+       return newState; // Return the correctly typed state
+    });
+  };
+  // ----------------------------------------------------------------------
+
+  // +++ ADD NEW: Handler for Parking Select ---
+  const handleParkingChange = (value: string) => {
+    console.log(`[handleParkingChange] New value: ${value}`);
+    setFormData((prev) => ({
+      ...prev,
+      parking_info_en: value,
+      parking_info_ar: value, // Keep both synced with the EN value
+    }));
+  };
+  // +++ ------------------------------------ +++
+
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     console.log("%c[EditListingForm] handleSubmit triggered!", "color: green; font-weight: bold;"); // <-- Add log here
     setSaving(true);
     setErrorMessage(null);
     
-    // --- Prepare data ---
-    // 1. Direct Listing Table Fields (No change needed here)
+    // --- Prepare data (REMOVE seating options) ---
     const listingPayload = {
       listing_type: formData.listing_type,
       google_maps_link: formData.google_maps_link || null,
@@ -948,7 +1009,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
         cuisine_type: formData.cuisine_type_en,
         story_behind: formData.story_behind_en,
         menu_highlights: formData.menu_highlights_en,
-        price_range: formData.price_range_en,
+        price_range: priceRangeNumberToString(formData.price_range_en), // Use converter
         dietary_options: formData.dietary_options_en,
       
         special_features: formData.special_features_en,
@@ -963,7 +1024,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
         duration: formData.duration_en,
         highlights: formData.highlights_en,
         religious_significance: formData.religious_significance_en,
-        entry_rules: formData.entry_rules_en,
+        entry_rules: formData.entry_rules_en || null,
         slug: formData.slug_en,
       },
       { // Arabic
@@ -980,7 +1041,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
         cuisine_type: formData.cuisine_type_ar,
         story_behind: formData.story_behind_ar,
         menu_highlights: formData.menu_highlights_ar,
-        price_range: formData.price_range_ar,
+        price_range: priceRangeNumberToString(formData.price_range_ar), // Use converter
         dietary_options: formData.dietary_options_ar,
       
         special_features: formData.special_features_ar,
@@ -995,7 +1056,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
         duration: formData.duration_ar,
         highlights: formData.highlights_ar,
         religious_significance: formData.religious_significance_ar,
-        entry_rules: formData.entry_rules_ar,
+        entry_rules: formData.entry_rules_ar || null,
         slug: formData.slug_ar,
       },
     ];
@@ -1344,7 +1405,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
           
         {/* --- Side-by-Side Language Container --- */}
          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-             {/* --- English Content Card --- */}
+             {/* --- English Content Card (REMOVE Seating Options JSX) --- */}
              <Card>
                <CardHeader><CardTitle>English Content</CardTitle></CardHeader>
                <CardContent className="grid grid-cols-1 gap-6">
@@ -1380,7 +1441,26 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                                 <Label htmlFor="special_services_en">Special Services (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
                                 <TagInput id="special_services_en" value={(formData.special_services_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('special_services_en', newValueString)} />
                             </div>
-                            <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
+                            {/* --- REPLACE Input with Select for parking_info_en (Shop/Mall) --- */}
+                            <div className="space-y-2">
+                                <Label htmlFor="parking_info_en">Parking Info (English)</Label>
+                                <Select
+                                    value={formData.parking_info_en}
+                                    onValueChange={handleParkingChange}
+                                >
+                                    <SelectTrigger id="parking_info_en">
+                                        <SelectValue placeholder="Select Parking Option" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {PARKING_OPTIONS.map(option => (
+                                            <SelectItem key={option.en} value={option.en}>
+                                                {option.en}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                            {/* ---------------------------------------------------------- */}
                         </>
                     )}
 
@@ -1393,16 +1473,40 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                                 <Label htmlFor="menu_highlights_en">Menu Highlights (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
                                 <TagInput id="menu_highlights_en" value={(formData.menu_highlights_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('menu_highlights_en', newValueString)} />
                             </div>
-                           <div className="space-y-2"><Label htmlFor="price_range_en">Price Range (English)</Label><Input id="price_range_en" name="price_range_en" value={formData.price_range_en} onChange={handleChange} /></div>
+                           {/* --- ADD English PriceRangeSelector Here --- */}
+                           <div className="space-y-2">
+                               <Label>Price Range (English)</Label>
+                               <PriceRangeSelector
+                                   value={formData.price_range_en}
+                                   onChange={handlePriceRangeChange}
+                               />
+                           </div>
+                           {/* ----------------------------------------- */}
                            <div className="space-y-2">
                                 <Label htmlFor="dietary_options_en">Dietary Options (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
                                 <TagInput id="dietary_options_en" value={(formData.dietary_options_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('dietary_options_en', newValueString)} />
                             </div>
+                           <div className="space-y-2"><Label htmlFor="special_features_en">Special Features (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label><Input id="special_features_en" name="special_features_en" value={formData.special_features_en} onChange={handleChange} /></div>
+                           {/* --- REPLACE Input with Select for parking_info_en (Restaurant/Café) --- */}
                            <div className="space-y-2">
-                                <Label htmlFor="special_features_en">Special Features (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
-                                <TagInput id="special_features_en" value={(formData.special_features_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('special_features_en', newValueString)} />
-                            </div>
-                           <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
+                               <Label htmlFor="parking_info_en">Parking Info (English)</Label>
+                               <Select
+                                   value={formData.parking_info_en}
+                                   onValueChange={handleParkingChange}
+                               >
+                                   <SelectTrigger id="parking_info_en">
+                                       <SelectValue placeholder="Select Parking Option" />
+                                   </SelectTrigger>
+                                   <SelectContent>
+                                       {PARKING_OPTIONS.map(option => (
+                                           <SelectItem key={option.en} value={option.en}>
+                                               {option.en}
+                                           </SelectItem>
+                                       ))}
+                                   </SelectContent>
+                               </Select>
+                           </div>
+                           {/* ---------------------------------------------------------------- */}
                        </>
                    )}
 
@@ -1418,7 +1522,26 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                                 <Label htmlFor="facilities_en">Facilities (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
                                 <TagInput id="facilities_en" value={(formData.facilities_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('facilities_en', newValueString)} />
                             </div>
-                           <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
+                           {/* --- REPLACE Input with Select for parking_info_en (Historical Site) --- */}
+                           <div className="space-y-2">
+                               <Label htmlFor="parking_info_en">Parking Info (English)</Label>
+                               <Select
+                                   value={formData.parking_info_en}
+                                   onValueChange={handleParkingChange}
+                               >
+                                   <SelectTrigger id="parking_info_en">
+                                       <SelectValue placeholder="Select Parking Option" />
+                                   </SelectTrigger>
+                                   <SelectContent>
+                                       {PARKING_OPTIONS.map(option => (
+                                           <SelectItem key={option.en} value={option.en}>
+                                               {option.en}
+                                           </SelectItem>
+                                       ))}
+                                   </SelectContent>
+                               </Select>
+                           </div>
+                           {/* ----------------------------------------------------------------- */}
                        </>
                    )}
 
@@ -1436,11 +1559,26 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                             <div className="space-y-2"><Label htmlFor="safety_tips_en">Safety Tips (English)</Label><Textarea id="safety_tips_en" name="safety_tips_en" value={formData.safety_tips_en} onChange={handleChange} /></div>
                             <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
                             <div className="space-y-2"><Label htmlFor="entry_fee_en">Entry Fee (English)</Label><Input id="entry_fee_en" name="entry_fee_en" value={formData.entry_fee_en} onChange={handleChange} /></div>
+                            {/* --- REPLACE Input with Select for parking_info_en (Park/Nature) --- */}
                             <div className="space-y-2">
-                                <Label htmlFor="seating_options_en">Seating Options (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
-                                <TagInput id="seating_options_en" value={(formData.seating_options_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('seating_options_en', newValueString)} />
+                               <Label htmlFor="parking_info_en">Parking Info (English)</Label>
+                               <Select
+                                   value={formData.parking_info_en}
+                                   onValueChange={handleParkingChange}
+                               >
+                                   <SelectTrigger id="parking_info_en">
+                                       <SelectValue placeholder="Select Parking Option" />
+                                   </SelectTrigger>
+                                   <SelectContent>
+                                       {PARKING_OPTIONS.map(option => (
+                                           <SelectItem key={option.en} value={option.en}>
+                                               {option.en}
+                                           </SelectItem>
+                                       ))}
+                                   </SelectContent>
+                               </Select>
                             </div>
-                            <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
+                            {/* ------------------------------------------------------------- */}
                         </>
                    )}
 
@@ -1452,17 +1590,40 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                                 <Label htmlFor="highlights_en">Highlights (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
                                 <TagInput id="highlights_en" value={(formData.highlights_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('highlights_en', newValueString)} />
                             </div>
-                           <div className="space-y-2"><Label htmlFor="price_range_en">Price Range (English)</Label><Input id="price_range_en" name="price_range_en" value={formData.price_range_en} onChange={handleChange} /></div>
+                            {/* --- ADD English PriceRangeSelector Here --- */}
+                           <div className="space-y-2">
+                               <Label>Price Range (English)</Label>
+                               <PriceRangeSelector
+                                   value={formData.price_range_en}
+                                   onChange={handlePriceRangeChange}
+                               />
+                           </div>
+                           {/* ----------------------------------------- */}
                            <div className="space-y-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
                            <div className="space-y-2">
                                 <Label htmlFor="safety_tips_en">Safety Tips (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
                                 <TagInput id="safety_tips_en" value={(formData.safety_tips_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('safety_tips_en', newValueString)} />
                             </div>
+                           {/* --- REPLACE Input with Select for parking_info_en (Experience) --- */}
                            <div className="space-y-2">
-                                <Label htmlFor="seating_options_en">Seating Options (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
-                                <TagInput id="seating_options_en" value={(formData.seating_options_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('seating_options_en', newValueString)} />
-                            </div>
-                           <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
+                               <Label htmlFor="parking_info_en">Parking Info (English)</Label>
+                               <Select
+                                   value={formData.parking_info_en}
+                                   onValueChange={handleParkingChange}
+                               >
+                                   <SelectTrigger id="parking_info_en">
+                                       <SelectValue placeholder="Select Parking Option" />
+                                   </SelectTrigger>
+                                   <SelectContent>
+                                       {PARKING_OPTIONS.map(option => (
+                                           <SelectItem key={option.en} value={option.en}>
+                                               {option.en}
+                                           </SelectItem>
+                                       ))}
+                                   </SelectContent>
+                               </Select>
+                           </div>
+                           {/* -------------------------------------------------------------- */}
                         </>
                    )}
 
@@ -1477,11 +1638,26 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                                 <Label htmlFor="facilities_en">Facilities (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
                                 <TagInput id="facilities_en" value={(formData.facilities_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('facilities_en', newValueString)} />
                             </div>
-                           <div className="space-y-2">
-                                <Label htmlFor="seating_options_en">Seating Options (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
-                                <TagInput id="seating_options_en" value={(formData.seating_options_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('seating_options_en', newValueString)} />
-                            </div>
-                           <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
+                           {/* --- REPLACE Input with Select for parking_info_en (Museum) --- */}
+                            <div className="space-y-2">
+                               <Label htmlFor="parking_info_en">Parking Info (English)</Label>
+                               <Select
+                                   value={formData.parking_info_en}
+                                   onValueChange={handleParkingChange}
+                               >
+                                   <SelectTrigger id="parking_info_en">
+                                       <SelectValue placeholder="Select Parking Option" />
+                                   </SelectTrigger>
+                                   <SelectContent>
+                                       {PARKING_OPTIONS.map(option => (
+                                           <SelectItem key={option.en} value={option.en}>
+                                               {option.en}
+                                           </SelectItem>
+                                       ))}
+                                   </SelectContent>
+                               </Select>
+                           </div>
+                           {/* ---------------------------------------------------------- */}
                            <div className="space-y-2">
                                 <Label htmlFor="highlights_en">Highlights (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
                                 <TagInput id="highlights_en" value={(formData.highlights_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('highlights_en', newValueString)} />
@@ -1500,17 +1676,32 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                                 <Label htmlFor="facilities_en">Facilities (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
                                 <TagInput id="facilities_en" value={(formData.facilities_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('facilities_en', newValueString)} />
                             </div>
+                           {/* --- REPLACE Input with Select for parking_info_en (Religious Site) --- */}
                            <div className="space-y-2">
-                                <Label htmlFor="seating_options_en">Seating Options (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
-                                <TagInput id="seating_options_en" value={(formData.seating_options_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('seating_options_en', newValueString)} />
-                            </div>
-                           <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
+                               <Label htmlFor="parking_info_en">Parking Info (English)</Label>
+                               <Select
+                                   value={formData.parking_info_en}
+                                   onValueChange={handleParkingChange}
+                               >
+                                   <SelectTrigger id="parking_info_en">
+                                       <SelectValue placeholder="Select Parking Option" />
+                                   </SelectTrigger>
+                                   <SelectContent>
+                                       {PARKING_OPTIONS.map(option => (
+                                           <SelectItem key={option.en} value={option.en}>
+                                               {option.en}
+                                           </SelectItem>
+                                       ))}
+                                   </SelectContent>
+                               </Select>
+                           </div>
+                           {/* ------------------------------------------------------------------ */}
                        </>
                    )}
                </CardContent>
              </Card>
 
-             {/* --- Arabic Content Card --- */}
+             {/* --- Arabic Content Card (REMOVE Seating Options JSX) --- */}
              <Card>
                <CardHeader><CardTitle>Arabic Content</CardTitle></CardHeader>
                <CardContent className="grid grid-cols-1 gap-6">
@@ -1537,7 +1728,27 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                                 <Label htmlFor="special_services_ar">Special Services (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
                                 <TagInput dir="rtl" id="special_services_ar" value={(formData.special_services_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('special_services_ar', newValueString)} />
                             </div>
-                            <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
+                            {/* --- REPLACE Input with Select for parking_info_ar (Shop/Mall) --- */}
+                             <div className="space-y-2">
+                                <Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label>
+                                <Select
+                                    value={formData.parking_info_ar}
+                                    onValueChange={handleParkingChange}
+                                    dir="rtl"
+                                >
+                                    <SelectTrigger id="parking_info_ar">
+                                        <SelectValue placeholder="اختر خيار المواقف" />
+                                    </SelectTrigger>
+                                    <SelectContent dir="rtl">
+                                        {PARKING_OPTIONS.map(option => (
+                                            <SelectItem key={option.en} value={option.en}> {/* Still use EN value */}
+                                                {option.ar} {/* Show AR label */}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                            {/* ---------------------------------------------------------- */}
                         </>
                    )}
 
@@ -1550,7 +1761,16 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                                 <Label htmlFor="menu_highlights_ar">Menu Highlights (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
                                 <TagInput dir="rtl" id="menu_highlights_ar" value={(formData.menu_highlights_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('menu_highlights_ar', newValueString)} />
                             </div>
-                           <div className="space-y-2"><Label htmlFor="price_range_ar">Price Range (Arabic)</Label><Input dir="rtl" id="price_range_ar" name="price_range_ar" value={formData.price_range_ar} onChange={handleChange} /></div>
+                           {/* --- REPLACE Old Input with PriceRangeSelector (Arabic) --- */}
+                           <div className="space-y-2">
+                               <Label>Price Range (Arabic)</Label> {/* Label doesn't need htmlFor */}
+                               <PriceRangeSelector
+                                   value={formData.price_range_ar}
+                                   onChange={handlePriceRangeChange}
+                                   // REMOVE dir="rtl"
+                               />
+                           </div>
+                           {/* --------------------------------------------------------- */}
                            <div className="space-y-2">
                                 <Label htmlFor="dietary_options_ar">Dietary Options (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
                                 <TagInput dir="rtl" id="dietary_options_ar" value={(formData.dietary_options_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('dietary_options_ar', newValueString)} />
@@ -1559,11 +1779,27 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                                 <Label htmlFor="special_features_ar">Special Features (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
                                 <TagInput dir="rtl" id="special_features_ar" value={(formData.special_features_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('special_features_ar', newValueString)} />
                             </div>
-                           <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
+                           {/* --- REPLACE Input with Select for parking_info_ar (Restaurant/Café) --- */}
                            <div className="space-y-2">
-                                <Label htmlFor="seating_options_ar">Seating Options (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
-                                <TagInput dir="rtl" id="seating_options_ar" value={(formData.seating_options_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('seating_options_ar', newValueString)} />
+                                <Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label>
+                                <Select
+                                    value={formData.parking_info_ar}
+                                    onValueChange={handleParkingChange}
+                                    dir="rtl"
+                                >
+                                    <SelectTrigger id="parking_info_ar">
+                                        <SelectValue placeholder="اختر خيار المواقف" />
+                                    </SelectTrigger>
+                                    <SelectContent dir="rtl">
+                                        {PARKING_OPTIONS.map(option => (
+                                            <SelectItem key={option.en} value={option.en}> {/* Still use EN value */}
+                                                {option.ar} {/* Show AR label */}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
                             </div>
+                           {/* ---------------------------------------------------------------- */}
                        </>
                    )}
 
@@ -1579,7 +1815,27 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                                 <Label htmlFor="facilities_ar">Facilities (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
                                 <TagInput dir="rtl" id="facilities_ar" value={(formData.facilities_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('facilities_ar', newValueString)} />
                             </div>
-                           <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
+                           {/* --- REPLACE Input with Select for parking_info_ar (Historical Site) --- */}
+                           <div className="space-y-2">
+                                <Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label>
+                                <Select
+                                    value={formData.parking_info_ar}
+                                    onValueChange={handleParkingChange}
+                                    dir="rtl"
+                                >
+                                    <SelectTrigger id="parking_info_ar">
+                                        <SelectValue placeholder="اختر خيار المواقف" />
+                                    </SelectTrigger>
+                                    <SelectContent dir="rtl">
+                                        {PARKING_OPTIONS.map(option => (
+                                            <SelectItem key={option.en} value={option.en}> {/* Still use EN value */}
+                                                {option.ar} {/* Show AR label */}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                           {/* ----------------------------------------------------------------- */}
                        </>
                    )}
 
@@ -1597,11 +1853,27 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                             <div className="space-y-2"><Label htmlFor="safety_tips_ar">Safety Tips (Arabic)</Label><Textarea dir="rtl" id="safety_tips_ar" name="safety_tips_ar" value={formData.safety_tips_ar} onChange={handleChange} /></div>
                             <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
                             <div className="space-y-2"><Label htmlFor="entry_fee_ar">Entry Fee (Arabic)</Label><Input dir="rtl" id="entry_fee_ar" name="entry_fee_ar" value={formData.entry_fee_ar} onChange={handleChange} /></div>
+                            {/* --- REPLACE Input with Select for parking_info_ar (Park/Nature) --- */}
                             <div className="space-y-2">
-                                <Label htmlFor="seating_options_ar">Seating Options (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
-                                <TagInput dir="rtl" id="seating_options_ar" value={(formData.seating_options_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('seating_options_ar', newValueString)} />
+                                <Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label>
+                                <Select
+                                    value={formData.parking_info_ar}
+                                    onValueChange={handleParkingChange}
+                                    dir="rtl"
+                                >
+                                    <SelectTrigger id="parking_info_ar">
+                                        <SelectValue placeholder="اختر خيار المواقف" />
+                                    </SelectTrigger>
+                                    <SelectContent dir="rtl">
+                                        {PARKING_OPTIONS.map(option => (
+                                            <SelectItem key={option.en} value={option.en}> {/* Still use EN value */}
+                                                {option.ar} {/* Show AR label */}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
                             </div>
-                            <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
+                            {/* ------------------------------------------------------------- */}
                         </>
                    )}
 
@@ -1613,18 +1885,43 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                                 <Label htmlFor="highlights_ar">Highlights (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
                                 <TagInput dir="rtl" id="highlights_ar" value={(formData.highlights_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('highlights_ar', newValueString)} />
                             </div>
-                           <div className="space-y-2"><Label htmlFor="price_range_ar">Price Range (Arabic)</Label><Input dir="rtl" id="price_range_ar" name="price_range_ar" value={formData.price_range_ar} onChange={handleChange} /></div>
+                            {/* --- REPLACE Old Input with PriceRangeSelector (Arabic) --- */}
+                           <div className="space-y-2">
+                               <Label>Price Range (Arabic)</Label> {/* Label doesn't need htmlFor */}
+                               <PriceRangeSelector
+                                   value={formData.price_range_ar}
+                                   onChange={handlePriceRangeChange}
+                                   // REMOVE dir="rtl"
+                               />
+                           </div>
+                           {/* --------------------------------------------------------- */}
                            <div className="space-y-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
                            <div className="space-y-2">
                                 <Label htmlFor="safety_tips_ar">Safety Tips (Arabic) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
                                 <TagInput dir="rtl" id="safety_tips_ar" value={(formData.safety_tips_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('safety_tips_ar', newValueString)} />
                             </div>
+                           {/* --- REPLACE Input with Select for parking_info_ar (Experience) --- */}
                            <div className="space-y-2">
-                                <Label htmlFor="seating_options_ar">Seating Options (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
-                                <TagInput dir="rtl" id="seating_options_ar" value={(formData.seating_options_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('seating_options_ar', newValueString)} />
-                            </div>
-                           <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
-                       </>
+                               <Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label>
+                               <Select
+                                   value={formData.parking_info_ar}
+                                   onValueChange={handleParkingChange}
+                                   dir="rtl"
+                               >
+                                   <SelectTrigger id="parking_info_ar">
+                                       <SelectValue placeholder="اختر خيار المواقف" />
+                                   </SelectTrigger>
+                                   <SelectContent dir="rtl">
+                                       {PARKING_OPTIONS.map(option => (
+                                           <SelectItem key={option.en} value={option.en}> {/* Still use EN value */}
+                                               {option.ar} {/* Show AR label */}
+                                           </SelectItem>
+                                       ))}
+                                   </SelectContent>
+                               </Select>
+                           </div>
+                           {/* -------------------------------------------------------------- */}
+                        </>
                    )}
 
                    {/* === Museum Specific Fields === */}
@@ -1638,11 +1935,26 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                                 <Label htmlFor="facilities_ar">Facilities (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
                                 <TagInput dir="rtl" id="facilities_ar" value={(formData.facilities_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('facilities_ar', newValueString)} />
                             </div>
-                           <div className="space-y-2">
-                                <Label htmlFor="seating_options_ar">Seating Options (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
-                                <TagInput dir="rtl" id="seating_options_ar" value={(formData.seating_options_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('seating_options_ar', newValueString)} />
-                            </div>
-                           <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
+                           {/* --- REPLACE Input with Select for parking_info_ar (Museum) --- */}
+                            <div className="space-y-2">
+                               <Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label>
+                               <Select
+                                   value={formData.parking_info_ar}
+                                   onValueChange={handleParkingChange}
+                               >
+                                   <SelectTrigger id="parking_info_ar">
+                                       <SelectValue placeholder="اختر خيار المواقف" />
+                                   </SelectTrigger>
+                                   <SelectContent>
+                                       {PARKING_OPTIONS.map(option => (
+                                           <SelectItem key={option.en} value={option.en}>
+                                               {option.en}
+                                           </SelectItem>
+                                       ))}
+                                   </SelectContent>
+                               </Select>
+                           </div>
+                           {/* ---------------------------------------------------------- */}
                            <div className="space-y-2">
                                 <Label htmlFor="highlights_ar">Highlights (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
                                 <TagInput dir="rtl" id="highlights_ar" value={(formData.highlights_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('highlights_ar', newValueString)} />
@@ -1661,11 +1973,26 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                                 <Label htmlFor="facilities_ar">Facilities (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
                                 <TagInput dir="rtl" id="facilities_ar" value={(formData.facilities_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('facilities_ar', newValueString)} />
                             </div>
+                           {/* --- REPLACE Input with Select for parking_info_ar (Religious Site) --- */}
                            <div className="space-y-2">
-                                <Label htmlFor="seating_options_ar">Seating Options (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
-                                <TagInput dir="rtl" id="seating_options_ar" value={(formData.seating_options_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('seating_options_ar', newValueString)} />
-                            </div>
-                           <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
+                               <Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label>
+                               <Select
+                                   value={formData.parking_info_ar}
+                                   onValueChange={handleParkingChange}
+                               >
+                                   <SelectTrigger id="parking_info_ar">
+                                       <SelectValue placeholder="اختر خيار المواقف" />
+                                   </SelectTrigger>
+                                   <SelectContent dir="rtl">
+                                       {PARKING_OPTIONS.map(option => (
+                                           <SelectItem key={option.en} value={option.en}> {/* Still use EN value */}
+                                               {option.ar} {/* Show AR label */}
+                                           </SelectItem>
+                                       ))}
+                                   </SelectContent>
+                               </Select>
+                           </div>
+                           {/* ------------------------------------------------------------------ */}
                        </>
                    )}
                </CardContent>
@@ -1778,7 +2105,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
             )}
           </Button>
         </div>
-       </form> 
-    </> 
+       </form>
+    </>
   );
 }

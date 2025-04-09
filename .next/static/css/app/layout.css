@@ -1183,6 +1183,11 @@ video {
   margin-top: calc(2rem * calc(1 - var(--tw-space-y-reverse)));
   margin-bottom: calc(2rem * var(--tw-space-y-reverse));
 }
+.space-x-1 > :not([hidden]) ~ :not([hidden]) {
+  --tw-space-x-reverse: 0;
+  margin-right: calc(0.25rem * var(--tw-space-x-reverse));
+  margin-left: calc(0.25rem * calc(1 - var(--tw-space-x-reverse)));
+}
 .divide-y > :not([hidden]) ~ :not([hidden]) {
   --tw-divide-y-reverse: 0;
   border-top-width: calc(1px * calc(1 - var(--tw-divide-y-reverse)));
@@ -1337,6 +1342,9 @@ video {
 }
 .fill-current {
   fill: currentColor;
+}
+.fill-yellow-400\/50 {
+  fill: rgb(250 204 21 / 0.5);
 }
 .object-contain {
   -o-object-fit: contain;
@@ -1612,6 +1620,10 @@ video {
 }
 .text-secondary-foreground {
   color: hsl(var(--secondary-foreground));
+}
+.text-yellow-500 {
+  --tw-text-opacity: 1;
+  color: rgb(234 179 8 / var(--tw-text-opacity, 1));
 }
 .underline-offset-4 {
   text-underline-offset: 4px;
@@ -2052,6 +2064,9 @@ input, select, textarea {
 }
 .hover\:text-secondary-foreground:hover {
   color: hsl(var(--secondary-foreground));
+}
+.hover\:text-yellow-400\/80:hover {
+  color: rgb(250 204 21 / 0.8);
 }
 .hover\:underline:hover {
   text-decoration-line: underline;
