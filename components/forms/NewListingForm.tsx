@@ -1,4 +1,4 @@
-import { useState, useRef, FormEvent, useEffect, ChangeEvent, useMemo } from "react";
+import { useState, useRef, FormEvent, useEffect, ChangeEvent, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { 
@@ -25,6 +25,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGr
 import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import { MapDisplay } from '../maps/MapDisplay';
+import { Database, Json } from '@/lib/database.types';
+import { OpeningHoursInput, OpeningHoursData } from './OpeningHoursInput';
+import { TagInput } from "@/components/ui/TagInput"; // Import TagInput
 
 // --- Define Listing Types ---
 const LISTING_TYPES = [
@@ -38,6 +41,29 @@ const LISTING_TYPES = [
   { value: "Religious Site", label: "Religious Site" },
   { value: "Other", label: "Other" }, // Optional catch-all
 ];
+
+// --- Add IRAQ_PROVINCES Constant ---
+const IRAQ_PROVINCES = [
+  { en: "Al Anbar", ar: "الأنبار" },
+  { en: "Babylon", ar: "بابل" },
+  { en: "Baghdad", ar: "بغداد" },
+  { en: "Basra", ar: "البصرة" },
+  { en: "Dhi Qar", ar: "ذي قار" },
+  { en: "Diyala", ar: "ديالى" },
+  { en: "Dohuk", ar: "دهوك" },
+  { en: "Erbil", ar: "أربيل" },
+  { en: "Karbala", ar: "كربلاء" },
+  { en: "Kirkuk", ar: "كركوك" },
+  { en: "Maysan", ar: "ميسان" },
+  { en: "Muthanna", ar: "المثنى" },
+  { en: "Najaf", ar: "النجف" },
+  { en: "Nineveh", ar: "نينوى" },
+  { en: "Qadisiyyah", ar: "القادسية" },
+  { en: "Saladin", ar: "صلاح الدين" },
+  { en: "Sulaymaniyah", ar: "السليمانية" },
+  { en: "Wasit", ar: "واسط" },
+];
+// --- End IRAQ_PROVINCES ---
 
 // --- NEW Interfaces based on Schema Dump ---
 interface Listing {
@@ -66,15 +92,13 @@ interface ListingTranslation {
   entertainment?: string[] | null; // ARRAY, nullable
   dining_options?: string[] | null; // ARRAY, nullable
   special_services?: string[] | null; // ARRAY, nullable
-  nearby_attractions?: string[] | null; // ARRAY, nullable
   parking_info?: string | null; // text, nullable
   cuisine_type?: string | null; // text, nullable
   story_behind?: string | null; // text, nullable
   menu_highlights?: string[] | null; // ARRAY, nullable
   price_range?: string | null; // text, nullable
   dietary_options?: string[] | null; // ARRAY, nullable
-  reservation_info?: string | null; // text, nullable
-  seating_options?: string[] | null; // ARRAY, nullable
+
   special_features?: string[] | null; // ARRAY, nullable
   historical_significance?: string | null; // text, nullable
   entry_fee?: string | null; // text, nullable
@@ -126,31 +150,116 @@ const generateUniqueFilename = (file: File): string => {
     return `${sanitizedOriginalName}_${timestamp}_${randomString}.${extension}`;
 };
 
+// Update the form data interface
+interface FormData {
+  listing_type: string;
+  location: string;
+  location_ar: string;
+  google_maps_link: string;
+  latitude: string;
+  longitude: string;
+  location_id: string | null;
+  google_place_id: string | null;
+  tags: string[]; // Correct
+  name_en: string;
+  description_en: string;
+  opening_hours_en: string;
+  popular_stores_en: string[]; // Corrected type
+  entertainment_en: string[]; // Corrected type
+  dining_options_en: string[]; // Corrected type
+  special_services_en: string[]; // Corrected type
+  parking_info_en: string;
+  cuisine_type_en: string;
+  story_behind_en: string;
+  menu_highlights_en: string[]; // Corrected type
+  price_range_en: string;
+  dietary_options_en: string[]; // Corrected type
+   // Corrected type
+  special_features_en: string[]; // Corrected type
+  historical_significance_en: string;
+  entry_fee_en: string;
+  best_time_to_visit_en: string;
+  tour_guide_availability_en: string;
+  tips_en: string;
+  activities_en: string[]; // Corrected type
+  facilities_en: string[]; // Corrected type
+  safety_tips_en: string;
+  duration_en: string;
+  highlights_en: string[]; // Corrected type
+  religious_significance_en: string;
+  entry_rules_en: string;
+  slug_en: string;
+  name_ar: string;
+  description_ar: string;
+  opening_hours_ar: string;
+  popular_stores_ar: string[]; // Corrected type
+  entertainment_ar: string[]; // Corrected type
+  dining_options_ar: string[]; // Corrected type
+  special_services_ar: string[]; // Corrected type
+  parking_info_ar: string;
+  cuisine_type_ar: string;
+  story_behind_ar: string;
+  menu_highlights_ar: string[]; // Corrected type
+  price_range_ar: string;
+  dietary_options_ar: string[]; // Corrected type
+ 
+  special_features_ar: string[]; // Corrected type
+  historical_significance_ar: string;
+  entry_fee_ar: string;
+  best_time_to_visit_ar: string;
+  tour_guide_availability_ar: string;
+  tips_ar: string;
+  activities_ar: string[]; // Corrected type
+  facilities_ar: string[]; // Corrected type
+  safety_tips_ar: string;
+  duration_ar: string;
+  highlights_ar: string[]; // Corrected type
+  religious_significance_ar: string;
+  entry_rules_ar: string;
+  slug_ar: string;
+  categoryIds: string[];
+  city_en: string;
+  city_ar: string;
+  opening_hours: OpeningHoursData;
+}
+
 export function NewListingForm() {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  // ++ Add generic handler for all TagInput fields ++
+  const handleGenericTagInputChange = useCallback((fieldName: keyof FormData, newValueString: string) => {
+      const newTagsArray = newValueString.split(',').map(tag => tag.trim()).filter(Boolean);
+      setFormData(prev => ({ ...prev, [fieldName]: newTagsArray }));
+  }, []);
+
   const [saving, setSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isFetchingLocation, setIsFetchingLocation] = useState(false);
   const [slugEnManuallySet, setSlugEnManuallySet] = useState(false);
   const [slugArManuallySet, setSlugArManuallySet] = useState(false);
   const { supabase: authSupabase } = useAuth(); // Get supabase client
-  const supabase = authSupabase || createClient();
+  const supabase = createClient(); // REMOVED generic <Database>
 
   // --- NEW State for multiple images ---
   const [stagedImageFiles, setStagedImageFiles] = useState<File[]>([]);
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
-  // ------------------------------------
+  // --- NEW State for primary image selection ---
+  const [primaryImageIndex, setPrimaryImageIndex] = useState<number>(0);
+  // -------------------------------------------
   
   // --- State for Collections ---
   const [availableCollections, setAvailableCollections] = useState<CuratedCollection[]>([]);
   const [collectionSelections, setCollectionSelections] = useState<CollectionSelectionState>({});
   const [collectionsLoading, setCollectionsLoading] = useState(true);
+  const [errorCollections, setErrorCollections] = useState<string | null>(null);
+  const [isLoadingCollections, setIsLoadingCollections] = useState(true);
   // ----------------------------
   
-  const [formData, setFormData] = useState({
-    listing_type: "", // Initialize as empty string
+  // Update the initial form data
+  const [formData, setFormData] = useState<FormData>({
+    listing_type: "", 
     location: "",
     location_ar: "",
     google_maps_link: "",
@@ -158,102 +267,88 @@ export function NewListingForm() {
     longitude: "",
     location_id: null as string | null,
     google_place_id: null as string | null,
-    tags: "",
+    tags: [], 
     name_en: "",
     description_en: "",
     opening_hours_en: "",
-    popular_stores_en: "",
-    entertainment_en: "",
-    dining_options_en: "",
-    special_services_en: "",
-    nearby_attractions_en: "",
+    popular_stores_en: [], 
+    entertainment_en: [], 
+    dining_options_en: [], 
+    special_services_en: [], 
     parking_info_en: "",
     cuisine_type_en: "",
     story_behind_en: "",
-    menu_highlights_en: "",
+    menu_highlights_en: [], 
     price_range_en: "",
-    dietary_options_en: "",
-    reservation_info_en: "",
-    seating_options_en: "",
-    special_features_en: "",
+    dietary_options_en: [], 
+   
+    special_features_en: [], 
     historical_significance_en: "",
     entry_fee_en: "",
     best_time_to_visit_en: "",
     tour_guide_availability_en: "",
     tips_en: "",
-    activities_en: "",
-    facilities_en: "",
+    activities_en: [], 
+    facilities_en: [], 
     safety_tips_en: "",
     duration_en: "",
-    highlights_en: "",
+    highlights_en: [], 
     religious_significance_en: "",
     entry_rules_en: "",
     slug_en: "",
     name_ar: "",
     description_ar: "",
     opening_hours_ar: "",
-    popular_stores_ar: "",
-    entertainment_ar: "",
-    dining_options_ar: "",
-    special_services_ar: "",
-    nearby_attractions_ar: "",
+    popular_stores_ar: [], // Corrected init
+    entertainment_ar: [], // Corrected init
+    dining_options_ar: [], // Corrected init
+    special_services_ar: [], // Corrected init
     parking_info_ar: "",
     cuisine_type_ar: "",
     story_behind_ar: "",
-    menu_highlights_ar: "",
+    menu_highlights_ar: [], // Corrected init
     price_range_ar: "",
-    dietary_options_ar: "",
-    reservation_info_ar: "",
-    seating_options_ar: "",
-    special_features_ar: "",
+    dietary_options_ar: [], // Corrected init
+   
+    special_features_ar: [], // Corrected init
     historical_significance_ar: "",
     entry_fee_ar: "",
     best_time_to_visit_ar: "",
     tour_guide_availability_ar: "",
     tips_ar: "",
-    activities_ar: "",
-    facilities_ar: "",
+    activities_ar: [], // Corrected init
+    facilities_ar: [], // Corrected init
     safety_tips_ar: "",
     duration_ar: "",
-    highlights_ar: "",
+    highlights_ar: [], // Corrected init
     religious_significance_ar: "",
     entry_rules_ar: "",
     slug_ar: "",
     categoryIds: [] as string[],
+    city_en: '',
+    city_ar: '',
+    opening_hours: { // Updated Default structure for multilingual notes
+      Monday: { isOpen: false, is24Hours: false, open: '09:00', close: '17:00', notes_en: '', notes_ar: '' },
+      Tuesday: { isOpen: false, is24Hours: false, open: '09:00', close: '17:00', notes_en: '', notes_ar: '' },
+      Wednesday: { isOpen: false, is24Hours: false, open: '09:00', close: '17:00', notes_en: '', notes_ar: '' },
+      Thursday: { isOpen: false, is24Hours: false, open: '09:00', close: '17:00', notes_en: '', notes_ar: '' },
+      Friday: { isOpen: false, is24Hours: false, open: '09:00', close: '17:00', notes_en: '', notes_ar: '' },
+      Saturday: { isOpen: false, is24Hours: false, open: '09:00', close: '17:00', notes_en: '', notes_ar: '' },
+      Sunday: { isOpen: false, is24Hours: false, open: '09:00', close: '17:00', notes_en: '', notes_ar: '' },
+    },
   });
   
+  // === Supabase Hooks ===
   const { add: addListing } = useSupabaseTable('listings');
   const { add: addListingCategory } = useSupabaseTable('listing_categories');
   const { add: addListingTranslation } = useSupabaseTable('listing_translations');
-  
-  const { categories: baseCategories, loading: categoriesLoading } = useCategories();
-  
-  // Hook for category translations (NEW)
-  const { data: allCategoryTranslations, status: categoryTranslationsStatus } = useSupabaseTable('category_translations');
+  // REMOVED Hooks for location handling - use raw client for upserts
+  // const { upsert: upsertLocation } = useSupabaseTable('locations'); 
+  // const { upsert: upsertLocationTranslation } = useSupabaseTable('location_translations');
+  // =====================
 
-  // REMOVE THIS OLD useEffect block (lines 237-254)
-  /*
-  useEffect(() => {
-      // Only process if both baseCategories exist and translations have successfully loaded
-      if (baseCategories && categoryTranslationsStatus === 'success' && allCategoryTranslations) {
-          console.log("[NewListingForm] Combining categories and translations...");
-          const combined = baseCategories.map(cat => {
-              const en = allCategoryTranslations.find(t => t.category_id === cat.id && t.language_code === 'en');
-              const ar = allCategoryTranslations.find(t => t.category_id === cat.id && t.language_code === 'ar');
-              return {
-                  ...cat,
-                  name_en: en?.name,
-                  name_ar: ar?.name,
-                  // Add other relevant fields if needed
-              } as DisplayCategory;
-          });
-          // Sort if needed
-          combined.sort((a, b) => (a.name_en ?? '').localeCompare(b.name_en ?? ''));
-          // setDisplayCategories(combined); // This caused the error
-          console.log("[NewListingForm] Combined categories set.");
-      }
-  }, [baseCategories, categoryTranslationsStatus]); // Depend on status and base categories only
-  */
+  const { categories: baseCategories, loading: categoriesLoading } = useCategories();
+  const { data: allCategoryTranslations, status: categoryTranslationsStatus } = useSupabaseTable('category_translations');
   
   // --- ADD BACK: Memoize the combined categories ---
   const combinedDisplayCategories = useMemo(() => {
@@ -319,26 +414,18 @@ export function NewListingForm() {
   }, [supabase]);
   // ---------------------------------
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
-    const { name, value, type } = e.target;
-    const newValue = type === 'checkbox' ? (e.target as HTMLInputElement).checked : value;
-    
-    setFormData(prev => {
-      const updatedData = { ...prev, [name]: newValue };
+  const handleChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+    const { name, value } = e.target;
 
-      // Automatic slug generation
-      if (name === 'name_en' && !slugEnManuallySet) {
-        updatedData.slug_en = slugify(value, { lower: true, strict: true });
-      } else if (name === 'name_ar' && !slugArManuallySet) {
-        // Basic slugify for Arabic - may need refinement for better transliteration if required
-        updatedData.slug_ar = slugify(value, { lower: true, strict: true }); 
-      } else if (name === 'slug_en') {
-        setSlugEnManuallySet(true); // User edited EN slug manually
-      } else if (name === 'slug_ar') {
-        setSlugArManuallySet(true); // User edited AR slug manually
-      }
-      return updatedData;
-    });
+    // If the changed field is one of the slugs, mark it as manually set.
+    if (name === 'slug_en') {
+        setSlugEnManuallySet(true);
+    }
+    if (name === 'slug_ar') {
+        setSlugArManuallySet(true);
+    }
+
+    setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
   // --- NEW Handler for Multiple Files ---
@@ -365,6 +452,10 @@ export function NewListingForm() {
       setStagedImageFiles(prev => [...prev, ...validFiles]);
       setImagePreviews(prev => [...prev, ...newPreviews]);
       if (e.target) e.target.value = ""; // Reset file input
+      // If this is the first image added, set it as primary
+      if (stagedImageFiles.length === 0 && validFiles.length > 0) {
+          setPrimaryImageIndex(0);
+      }
     }
   };
   
@@ -376,6 +467,19 @@ export function NewListingForm() {
     }
     setStagedImageFiles(prev => prev.filter((_, index) => index !== indexToRemove));
     setImagePreviews(prev => prev.filter((_, index) => index !== indexToRemove));
+    
+    // --- Adjust primary index if the primary image is removed ---
+    // Corrected logic based on the *remaining* files count
+    const remainingFilesCount = stagedImageFiles.length - 1; 
+    if (indexToRemove === primaryImageIndex) {
+        // If removing the primary, set the new primary to 0 if images remain
+        setPrimaryImageIndex(remainingFilesCount > 0 ? 0 : 0);
+    } else if (indexToRemove < primaryImageIndex) {
+        // If removing before the primary, decrement the index
+        setPrimaryImageIndex(prev => prev - 1);
+    }
+    // No change needed if removing after the primary
+    // -----------------------------------------------------------
   };
 
   // --- Cleanup Object URLs on unmount ---
@@ -476,6 +580,13 @@ export function NewListingForm() {
   };
   // -----------------------------------------
 
+  // Handler for OpeningHoursInput
+  const handleOpeningHoursChange = (newOpeningHours: OpeningHoursData) => {
+    setFormData(prev => ({ ...prev, opening_hours: newOpeningHours }));
+  };
+  
+ 
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!addListing || !addListingTranslation || !addListingCategory || !supabase) {
@@ -483,205 +594,334 @@ export function NewListingForm() {
       return;
     }
     if (stagedImageFiles.length === 0) {
-        setErrorMessage('Please select at least one image.');
-        return;
+      setErrorMessage('Please select at least one image.');
+      return;
     }
 
     setSaving(true);
     setErrorMessage(null);
     
-    let uploadedImagePaths: string[] = []; // To store paths from storage
+    let uploadedImagePaths: string[] = [];
+    let locationIdToLink: string | null = null; // Variable to hold the location ID
 
     try {
-      // 1. Upload all staged images concurrently
-       console.log(`Uploading ${stagedImageFiles.length} image(s)...`);
-       const uploadPromises = stagedImageFiles.map(file => {
-           const uniqueFilename = generateUniqueFilename(file);
-           // Make sure STORAGE_BUCKET_NAME is defined or replace 'listings'
-           const bucket = 'listing-media'; // Use existing bucket name
-           return supabase.storage.from(bucket).upload(uniqueFilename, file, {
-               cacheControl: '3600',
-               upsert: false,
-           });
-       });
+      // === NEW Step 0: Determine/Create Location ID ===
+      console.log("[handleSubmit] Determining Location ID...");
+      if (formData.google_place_id && formData.latitude && formData.longitude) {
+          console.log(`[handleSubmit] Upserting location based on google_place_id: ${formData.google_place_id}`);
+          // Use raw client for upsert
+          const { data: upsertedLocationData, error: locUpsertError } = await supabase // Renamed variable
+             .from('locations')
+             .upsert({
+                 google_place_id: formData.google_place_id,
+                 latitude: parseFloat(formData.latitude),
+                 longitude: parseFloat(formData.longitude),
+             }, { onConflict: 'google_place_id' })
+             .select('id')
+             .single();
+          if (locUpsertError || !upsertedLocationData) throw locUpsertError || new Error("Failed to upsert location based on place_id");
+          locationIdToLink = upsertedLocationData.id;
+          console.log(`[handleSubmit] Location ID from place_id upsert: ${locationIdToLink}`);
+      } else if (formData.location || formData.city_en || formData.location_ar || formData.city_ar) {
+          console.log("[handleSubmit] Inserting new location record (no place_id provided).");
+          // Use raw client for insert
+          const { data: insertedLocationData, error: locInsertError } = await supabase // Renamed variable
+             .from('locations')
+             .insert([{}]) // Insert empty object
+             .select('id')
+             .single();
+          if (locInsertError || !insertedLocationData) throw locInsertError || new Error("Failed to insert new location");
+          locationIdToLink = insertedLocationData.id;
+          console.log(`[handleSubmit] Location ID from new insert: ${locationIdToLink}`);
+      } else {
+          console.log("[handleSubmit] No location data provided, locationIdToLink remains null.");
+      }
+      // ============================================
 
-       const uploadResults = await Promise.all(uploadPromises);
+      // 1. Upload Images (Keep existing logic and logs)
+      console.log("[handleSubmit] Uploading images...");
+      for (const file of stagedImageFiles) {
+        const fileExt = file.name.split('.').pop();
+        const fileName = `${Math.random()}.${fileExt}`;
+        const filePath = `listings/${fileName}`;
 
-       // Check for errors and collect paths
-       uploadResults.forEach((result, index) => {
-           if (result.error) {
-               console.error(`Error uploading file ${stagedImageFiles[index].name}:`, result.error);
-               // Decide how to handle partial failures - here we throw an error
-               throw new Error(`Failed to upload image ${stagedImageFiles[index].name}: ${result.error.message}`);
-           }
-           if (result.data?.path) {
-               uploadedImagePaths.push(result.data.path);
-           } else {
-                // This shouldn't happen if error is null, but good to check
-                throw new Error(`Upload succeeded for ${stagedImageFiles[index].name} but no path returned.`);
-           }
-       });
-       console.log("Uploaded image paths:", uploadedImagePaths);
+        // --- ADD DETAILED LOGGING FOR UPLOAD --- 
+        console.log(`[handleSubmit] Attempting to upload ${filePath}...`);
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('listing-media') 
+          .upload(filePath, file);
+          
+        // Log result immediately
+        if (uploadError) {
+            console.error(`[handleSubmit] Upload ERROR for ${filePath}:`, uploadError);
+            // Optionally throw the error here to stop the process if an upload fails
+            throw new Error(`Failed to upload ${file.name}: ${uploadError.message}`); 
+        } else {
+             console.log(`[handleSubmit] Upload SUCCESS for ${filePath}:`, uploadData);
+             uploadedImagePaths.push(filePath); // Only push on success
+        }
+        // --- END DETAILED LOGGING --- 
+      }
+      console.log("[handleSubmit] Accumulated Uploaded Image Paths (after loop):", uploadedImagePaths); 
 
-
-      // 2. Prepare listing data (use uploadedImagePaths)
+      // 2. Prepare listing data (UPDATED: Add location_id, ADD BACK location)
+      console.log("[handleSubmit] Preparing listing data...");
       const listingData: Partial<Listing> = {
         listing_type: formData.listing_type,
-        location: formData.location,
+        location: formData.location || 'Unknown Location', // <-- ADDED BACK (with fallback)
         google_maps_link: formData.google_maps_link || null,
         latitude: formData.latitude ? parseFloat(formData.latitude) : null,
         longitude: formData.longitude ? parseFloat(formData.longitude) : null,
-        location_id: formData.location_id || null,
-        tags: formData.tags ? formData.tags.split(',').map(s => s.trim()) : null,
-        photos_videos: uploadedImagePaths, // <-- Use the array of paths
+        location_id: locationIdToLink, // <-- Keep this
+        tags: formData.tags.length > 0 ? formData.tags : null, 
+        photos_videos: uploadedImagePaths, 
       };
+      
+      // --- ADD LOG BEFORE INSERT --- 
+      console.log("[handleSubmit] Final listingData before calling addListing:", JSON.stringify(listingData, null, 2));
+      // --- END LOG BEFORE INSERT --- 
 
-      // Add validation (e.g., ensure listing_type and location are set)
-       if (!listingData.listing_type || !listingData.location) {
-            throw new Error("Listing Type and Location are required.");
-       }
-       
-      // 3. Add Listing
-       console.log("Inserting listing:", listingData);
+      // 3. Add Listing (Keep existing logic and logs)
+      console.log("[handleSubmit] Adding listing to DB...");
       const newListing = await addListing(listingData);
+      console.log("[handleSubmit] Result from addListing:", newListing);
       if (!newListing || !newListing.id) {
         throw new Error('Failed to create listing or get new listing ID.');
       }
       const newListingId = newListing.id;
-      console.log("Listing created with ID:", newListingId);
 
-      // 4. Add Translations (Prepare EN and AR)
+      // === NEW Step 3.5: Add Location Translations ===
+      if (locationIdToLink) {
+          console.log(`[handleSubmit] Upserting location translations for location ID: ${locationIdToLink}`);
+          const locTranslationsToUpsert = [];
+          if (formData.location || formData.city_en) {
+              locTranslationsToUpsert.push({
+                  location_id: locationIdToLink,
+                  language_code: 'en',
+                  address: formData.location || null,
+                  city: formData.city_en || null,
+                  name: formData.location || formData.city_en || "Location EN" // Basic name
+              });
+          }
+          if (formData.location_ar || formData.city_ar) {
+              locTranslationsToUpsert.push({
+                  location_id: locationIdToLink,
+                  language_code: 'ar',
+                  address: formData.location_ar || null,
+                  city: formData.city_ar || null,
+                  name: formData.location_ar || formData.city_ar || "Location AR" // Basic name
+              });
+          }
+          if (locTranslationsToUpsert.length > 0) {
+              console.log("[handleSubmit] Location Translations to Upsert:", locTranslationsToUpsert);
+              // Use raw client for upsert (Corrected)
+              const { error: locTransUpsertError } = await supabase 
+                  .from('location_translations')
+                  .upsert(locTranslationsToUpsert, { onConflict: 'location_id, language_code' });
+              if (locTransUpsertError) throw locTransUpsertError;
+              console.log("[handleSubmit] Location Translations upserted.");
+          }
+      } else {
+          console.log("[handleSubmit] Skipping location translations (no locationIdToLink).");
+      }
+      // ==========================================
+
+      // 4. Add Listing Translations (Keep existing logic)
+      console.log("[handleSubmit] Preparing listing translations...");
+      // ... (prepare translations array) ...
+      console.log("[handleSubmit] Adding listing translations...");
       const translations = [];
       const commonTranslationData = { listing_id: newListingId };
-      // Helper to parse comma-separated string to array or null
-      const parseArray = (input: string): string[] | null => {
-          const trimmed = input.trim();
-          return trimmed ? trimmed.split(',').map(s => s.trim()) : null;
-      };
 
       // English Translation
-      if (formData.name_en) { // Assuming name_en is required for EN translation
-          translations.push({
-              ...commonTranslationData,
-              language_code: 'en',
-              name: formData.name_en,
-              description: formData.description_en || null,
-              opening_hours: formData.opening_hours_en || null,
-              popular_stores: parseArray(formData.popular_stores_en),
-              entertainment: parseArray(formData.entertainment_en),
-              dining_options: parseArray(formData.dining_options_en),
-              special_services: parseArray(formData.special_services_en),
-              nearby_attractions: parseArray(formData.nearby_attractions_en),
-              parking_info: formData.parking_info_en || null,
-              cuisine_type: formData.cuisine_type_en || null,
-              story_behind: formData.story_behind_en || null,
-              menu_highlights: parseArray(formData.menu_highlights_en),
-              price_range: formData.price_range_en || null,
-              dietary_options: parseArray(formData.dietary_options_en),
-              reservation_info: formData.reservation_info_en || null,
-              seating_options: parseArray(formData.seating_options_en),
-              special_features: parseArray(formData.special_features_en),
-              historical_significance: formData.historical_significance_en || null,
-              entry_fee: formData.entry_fee_en || null,
-              best_time_to_visit: formData.best_time_to_visit_en || null,
-              tour_guide_availability: formData.tour_guide_availability_en || null,
-              tips: formData.tips_en || null,
-              activities: parseArray(formData.activities_en),
-              facilities: parseArray(formData.facilities_en),
-              safety_tips: formData.safety_tips_en || null,
-              duration: formData.duration_en || null,
-              highlights: parseArray(formData.highlights_en),
-              religious_significance: formData.religious_significance_en || null,
-              entry_rules: formData.entry_rules_en || null,
-              slug: formData.slug_en || null,
-          });
+      if (formData.name_en) {
+        translations.push({
+          ...commonTranslationData,
+          language_code: 'en',
+          name: formData.name_en,
+          description: formData.description_en || null,
+          opening_hours: JSON.stringify(formData.opening_hours), 
+          popular_stores: formData.popular_stores_en.length > 0 ? formData.popular_stores_en : null, // Direct assignment
+          entertainment: formData.entertainment_en.length > 0 ? formData.entertainment_en : null, // Direct assignment
+          dining_options: formData.dining_options_en.length > 0 ? formData.dining_options_en : null, // Direct assignment
+          special_services: formData.special_services_en.length > 0 ? formData.special_services_en : null, // Direct assignment
+          parking_info: formData.parking_info_en || null,
+          cuisine_type: formData.cuisine_type_en || null,
+          story_behind: formData.story_behind_en || null,
+          menu_highlights: formData.menu_highlights_en.length > 0 ? formData.menu_highlights_en : null, // Direct assignment
+          price_range: formData.price_range_en || null,
+          dietary_options: formData.dietary_options_en.length > 0 ? formData.dietary_options_en : null, // Direct assignment
+          special_features: formData.special_features_en.length > 0 ? formData.special_features_en : null, // Direct assignment
+          historical_significance: formData.historical_significance_en || null,
+          entry_fee: formData.entry_fee_en || null,
+          best_time_to_visit: formData.best_time_to_visit_en || null,
+          tour_guide_availability: formData.tour_guide_availability_en || null,
+          tips: formData.tips_en || null,
+          activities: formData.activities_en.length > 0 ? formData.activities_en : null, // Direct assignment
+          facilities: formData.facilities_en.length > 0 ? formData.facilities_en : null, // Direct assignment
+          safety_tips: formData.safety_tips_en || null,
+          duration: formData.duration_en || null,
+          highlights: formData.highlights_en.length > 0 ? formData.highlights_en : null, // Direct assignment
+          religious_significance: formData.religious_significance_en || null,
+          entry_rules: formData.entry_rules_en || null,
+          slug: formData.slug_en || null,
+        });
+      }
+
+      // Arabic Translation
+      if (formData.name_ar) {
+        translations.push({
+          ...commonTranslationData,
+          language_code: 'ar',
+          name: formData.name_ar,
+          description: formData.description_ar || null,
+          opening_hours: JSON.stringify(formData.opening_hours), 
+          popular_stores: formData.popular_stores_ar.length > 0 ? formData.popular_stores_ar : null, // Direct assignment
+          entertainment: formData.entertainment_ar.length > 0 ? formData.entertainment_ar : null, // Direct assignment
+          dining_options: formData.dining_options_ar.length > 0 ? formData.dining_options_ar : null, // Direct assignment
+          special_services: formData.special_services_ar.length > 0 ? formData.special_services_ar : null, // Direct assignment
+          parking_info: formData.parking_info_ar || null,
+          cuisine_type: formData.cuisine_type_ar || null,
+          story_behind: formData.story_behind_ar || null,
+          menu_highlights: formData.menu_highlights_ar.length > 0 ? formData.menu_highlights_ar : null, // Direct assignment
+          price_range: formData.price_range_ar || null,
+          dietary_options: formData.dietary_options_ar.length > 0 ? formData.dietary_options_ar : null, // Direct assignment
+          special_features: formData.special_features_ar.length > 0 ? formData.special_features_ar : null, // Direct assignment
+          historical_significance: formData.historical_significance_ar || null,
+          entry_fee: formData.entry_fee_ar || null,
+          best_time_to_visit: formData.best_time_to_visit_ar || null,
+          tour_guide_availability: formData.tour_guide_availability_ar || null,
+          tips: formData.tips_ar || null,
+          activities: formData.activities_ar.length > 0 ? formData.activities_ar : null, // Direct assignment
+          facilities: formData.facilities_ar.length > 0 ? formData.facilities_ar : null, // Direct assignment
+          safety_tips: formData.safety_tips_ar || null,
+          duration: formData.duration_ar || null,
+          highlights: formData.highlights_ar.length > 0 ? formData.highlights_ar : null, // Direct assignment
+          religious_significance: formData.religious_significance_ar || null,
+          entry_rules: formData.entry_rules_ar || null,
+          slug: formData.slug_ar || null,
+        });
+      }
+
+      // 5. Add Translations
+      for (const translation of translations) {
+        await addListingTranslation(translation);
+      }
+
+      // 6. Add Categories (ADD logging/error handling)
+      console.log("[handleSubmit] Adding category links...");
+      for (const categoryId of formData.categoryIds) {
+        try {
+            console.log(` -> Linking category ID: ${categoryId}`);
+            await addListingCategory({
+              listing_id: newListingId,
+              category_id: categoryId,
+            });
+        } catch (catError) {
+            console.error(`Error linking category ${categoryId}:`, catError);
+            // Optionally continue or throw error / set specific error message
+        }
+      }
+
+      // --- NEW Step 6.5: Add Media Table Entries ---
+      console.log("[handleSubmit] Preparing media table entries...");
+      if (uploadedImagePaths.length > 0) {
+        try {
+          const publicUrlPromises = uploadedImagePaths.map(path => 
+            supabase.storage.from('listing-media').getPublicUrl(path)
+          );
+          // Use Promise.allSettled to handle individual promise failures
+          const settledResults = await Promise.allSettled(publicUrlPromises);
+
+          const mediaRecordsToInsert = settledResults.map((result, index) => {
+            if (result.status === 'fulfilled') {
+              // Check if data and publicUrl exist within the fulfilled value
+              const publicUrl = result.value?.data?.publicUrl;
+              if (!publicUrl) {
+                console.warn(`Could not get public URL for path: ${uploadedImagePaths[index]}. Skipping media record.`);
+                return null;
+              }
+              return {
+                listing_id: newListingId,
+                url: publicUrl,
+                is_primary: index === primaryImageIndex, // UPDATED based on state
+                media_type: 'image' 
+              };
+            } else {
+              // Handle rejected promises (errors during getPublicUrl)
+              console.error(`Error getting public URL for ${uploadedImagePaths[index]}:`, result.reason);
+              return null;
+            }
+          }).filter(record => record !== null); // Filter out null records
+
+          if (mediaRecordsToInsert.length > 0) {
+             console.log("[handleSubmit] Inserting media records:", mediaRecordsToInsert);
+             const { error: mediaInsertError } = await supabase
+               .from('media') // Assuming your table name is 'media'
+               .insert(mediaRecordsToInsert as any); // Assert type if needed after filtering nulls
+
+             if (mediaInsertError) {
+               throw mediaInsertError;
+             }
+             console.log("[handleSubmit] Media records inserted successfully.");
+          } else {
+             console.log("[handleSubmit] No valid media records to insert (URL generation might have failed).");
+          }
+
+        } catch (mediaError: any) {
+           console.error("Error creating media table entries:", mediaError); // Log message and error object separately
+           // Decide if this should halt the process or just log
+           // setErrorMessage(`Failed to save image metadata: ${mediaError.message}`); 
+           // Potentially re-throw the error if it's critical
+           // throw mediaError; 
+        }
       } else {
-         throw new Error("English Name is required."); // Make EN name mandatory
+         console.log("[handleSubmit] No uploaded images found, skipping media table entries.");
+      }
+      // --- END NEW Step 6.5 ---
+
+      // 7. Add to Collections (CHANGE table, UPDATE payload, ADD logging/error handling)
+      console.log("[handleSubmit] Adding collection links...");
+      for (const [collectionId, selection] of Object.entries(collectionSelections)) {
+        if (selection.selected) {
+          try {
+              console.log(` -> Linking collection ID: ${collectionId}, featured: ${selection.featured}`);
+              await supabase.from('curated_collection_items').insert({ // <-- CHANGED Table Name
+                listing_id: newListingId,
+                collection_id: collectionId,
+                feature_on_home: selection.featured, // <-- CHANGED Payload Field Name
+              });
+          } catch (collError) {
+               console.error(`Error linking collection ${collectionId}:`, collError);
+               // Optionally continue or throw error / set specific error message
+          }
+        }
       }
 
-       // Arabic Translation
-      if (formData.name_ar) { // Assuming name_ar is required for AR translation
-          translations.push({
-               ...commonTranslationData,
-              language_code: 'ar',
-              name: formData.name_ar,
-              description: formData.description_ar || null,
-              opening_hours: formData.opening_hours_ar || null,
-              popular_stores: parseArray(formData.popular_stores_ar),
-              entertainment: parseArray(formData.entertainment_ar),
-              dining_options: parseArray(formData.dining_options_ar),
-              special_services: parseArray(formData.special_services_ar),
-              nearby_attractions: parseArray(formData.nearby_attractions_ar),
-              parking_info: formData.parking_info_ar || null,
-              cuisine_type: formData.cuisine_type_ar || null,
-              story_behind: formData.story_behind_ar || null,
-              menu_highlights: parseArray(formData.menu_highlights_ar),
-              price_range: formData.price_range_ar || null,
-              dietary_options: parseArray(formData.dietary_options_ar),
-              reservation_info: formData.reservation_info_ar || null,
-              seating_options: parseArray(formData.seating_options_ar),
-              special_features: parseArray(formData.special_features_ar),
-              historical_significance: formData.historical_significance_ar || null,
-              entry_fee: formData.entry_fee_ar || null,
-              best_time_to_visit: formData.best_time_to_visit_ar || null,
-              tour_guide_availability: formData.tour_guide_availability_ar || null,
-              tips: formData.tips_ar || null,
-              activities: parseArray(formData.activities_ar),
-              facilities: parseArray(formData.facilities_ar),
-              safety_tips: formData.safety_tips_ar || null,
-              duration: formData.duration_ar || null,
-              highlights: parseArray(formData.highlights_ar),
-              religious_significance: formData.religious_significance_ar || null,
-              entry_rules: formData.entry_rules_ar || null,
-              slug: formData.slug_ar || null,
-          });
-      } else {
-           throw new Error("Arabic Name is required."); // Make AR name mandatory
+      console.log("New listing created successfully in DB:", newListing);
+      
+      // --- Wrap Navigation in try...catch ---
+      try {
+         console.log("[handleSubmit] Attempting navigation to /dashboard/listings"); // Corrected log message
+         router.push("/dashboard/listings"); // Corrected Redirect path
+      } catch (navigationError) {
+         console.error("[handleSubmit] Error during router.push:", navigationError);
+         // Optionally set an error message specific to navigation failure
+         // setErrorMessage("Save successful, but failed to redirect.");
       }
-
-      if (translations.length > 0) {
-          console.log("Inserting translations:", translations);
-          const translationPromises = translations.map(t => addListingTranslation(t));
-          const translationResults = await Promise.all(translationPromises);
-          // Check results for errors if addListingTranslation hook returns them
-           if (translationResults.some(result => !result)) { // Basic check, adjust if hook returns error object
-                throw new Error('Failed to save one or more translations.');
-           }
-      }
-
-      // 5. Add Category Links
-      if (formData.categoryIds.length > 0) {
-        const categoryLinkPromises = formData.categoryIds.map(catId => 
-          addListingCategory({ listing_id: newListingId, category_id: catId })
-        );
-        await Promise.all(categoryLinkPromises);
-         // Add error checking if needed
-      }
-
-      // 6. Success - Reset state and redirect
-      console.log("Listing created successfully!");
-      setStagedImageFiles([]); // Clear staged files
-      setImagePreviews([]);    // Clear previews
-      formRef.current?.reset(); // Reset form fields
-      router.push('/dashboard/listings'); // Redirect to listings page
+      // ---------------------------------------
 
     } catch (err: any) {
-      console.error('Error creating listing:', err);
-      setErrorMessage(err.message || 'An unexpected error occurred.');
-
-      // Optional: Attempt to delete already uploaded images if DB insert fails
-      if (uploadedImagePaths.length > 0 && supabase) {
-          console.warn(`Attempting to delete ${uploadedImagePaths.length} orphaned image(s) due to error.`);
-          try {
-               // Make sure STORAGE_BUCKET_NAME is defined or replace 'listings'
-               const bucket = 'listing-media'; // Use existing bucket name
-               await supabase.storage.from(bucket).remove(uploadedImagePaths);
-          } catch (cleanupError) {
-              console.error("Failed to delete orphaned image(s) during cleanup:", cleanupError);
-          }
-      }
-
+      console.error('Error creating listing:', err); // Log the full error object
+      // Try to extract more specific messages
+      const specificMessage = err.details || err.message || 'An unknown error occurred during listing creation.';
+      console.error('Specific Error Message:', specificMessage);
+      setErrorMessage(specificMessage); // Display a more specific error if available
+      // *Ensure saving is set to false on error too*
+      setSaving(false); 
     } finally {
+      console.log("[NewListingForm] Reached finally block."); // Add log
+      // *Move setSaving(false) here as the primary place*
       setSaving(false);
     }
   };
@@ -699,6 +939,39 @@ export function NewListingForm() {
   // --------------------------------
   
   // --- Loading States Combination ---
+
+  // ++ Auto-generate English slug ++
+  useEffect(() => {
+      if (!slugEnManuallySet && formData.name_en) {
+          const generatedSlug = slugify(formData.name_en, { lower: true, strict: true, locale: 'en', remove: /[*+~.()'"!:@]/g });
+          setFormData(prev => ({ ...prev, slug_en: generatedSlug }));
+      }
+      // If name_en is cleared and not manually set, clear the slug too.
+      else if (!slugEnManuallySet && !formData.name_en) {
+          setFormData(prev => ({ ...prev, slug_en: '' }));
+      }
+  }, [formData.name_en, slugEnManuallySet]);
+
+  // ++ Auto-generate Arabic slug ++
+  useEffect(() => {
+      if (!slugArManuallySet && formData.name_ar) {
+          // Note: slugify might transliterate or remove Arabic chars depending on config/defaults
+          const generatedSlug = slugify(formData.name_ar, { lower: true, strict: true, remove: /[*+~.()'"!:@]/g }); 
+          setFormData(prev => ({ ...prev, slug_ar: generatedSlug }));
+      }
+       // If name_ar is cleared and not manually set, clear the slug too.
+      else if (!slugArManuallySet && !formData.name_ar) {
+          setFormData(prev => ({ ...prev, slug_ar: '' }));
+      }
+  }, [formData.name_ar, slugArManuallySet]);
+
+  // --- NEW: Handler to set the primary image ---
+  const handleSetPrimaryImage = (indexToSet: number) => {
+    if (indexToSet >= 0 && indexToSet < stagedImageFiles.length) {
+        setPrimaryImageIndex(indexToSet);
+    }
+  };
+  // ---------------------------------------------
 
   return (
     <form ref={formRef} onSubmit={handleSubmit} className="space-y-8">
@@ -736,13 +1009,76 @@ export function NewListingForm() {
                 </Select>
              </div>
              
-             {/* REMOVED Location Name EN input */}
-            {/* 
+             {/* Location Name (English Address) */}
              <div className="space-y-2">
-                <Label htmlFor="name_en">Location Name (English) *</Label> 
-                <Input id="name_en" name="name_en" value={formData.name_en} onChange={handleChange} placeholder="e.g., Central Park Mall" required />
-             </div> 
-            */}
+                 <Label htmlFor="location">Location Name / Address (English)</Label>
+                 <Textarea id="location" name="location" value={formData.location} onChange={handleChange} placeholder="e.g., Main Street, Downtown" />
+             </div>
+
+             {/* --- START: City Dropdowns --- */}
+             {/* City (English) */}
+             <div className="space-y-2">
+                 <Label htmlFor="city_en">City (English) *</Label>
+                 <Select
+                     name="city_en"
+                     required
+                     value={formData.city_en}
+                     // === START Linked Logic ===
+                     onValueChange={(value) => {
+                         const matchingProvince = IRAQ_PROVINCES.find(p => p.en === value);
+                         setFormData((prev) => ({ 
+                             ...prev, 
+                             city_en: value, 
+                             city_ar: matchingProvince ? matchingProvince.ar : '' // Update Arabic city too
+                         }));
+                     }}
+                     // === END Linked Logic ===
+                 >
+                     <SelectTrigger id="city_en">
+                         <SelectValue placeholder="Select City (English)" />
+                     </SelectTrigger>
+                     <SelectContent>
+                         {IRAQ_PROVINCES.map((province) => (
+                             <SelectItem key={province.en} value={province.en}>
+                                 {province.en}
+                             </SelectItem>
+                         ))}
+                     </SelectContent>
+                 </Select>
+             </div>
+
+             {/* City (Arabic) */}
+             <div className="space-y-2">
+                 <Label htmlFor="city_ar">City (Arabic) *</Label>
+                 <Select
+                     name="city_ar"
+                     required
+                     value={formData.city_ar}
+                     // === START Linked Logic ===
+                     onValueChange={(value) => {
+                         const matchingProvince = IRAQ_PROVINCES.find(p => p.ar === value);
+                         setFormData((prev) => ({ 
+                             ...prev, 
+                             city_ar: value, 
+                             city_en: matchingProvince ? matchingProvince.en : '' // Update English city too
+                         }));
+                     }}
+                     // === END Linked Logic ===
+                     dir="rtl"
+                 >
+                     <SelectTrigger id="city_ar">
+                         <SelectValue placeholder="اختر المدينة (عربي)" />
+                     </SelectTrigger>
+                     <SelectContent dir="rtl">
+                         {IRAQ_PROVINCES.map((province) => (
+                             <SelectItem key={province.ar} value={province.ar}>
+                                 {province.ar}
+                             </SelectItem>
+                         ))}
+                     </SelectContent>
+                 </Select>
+             </div>
+             {/* --- END: City Dropdowns --- */}
 
          </CardContent>
       </Card>
@@ -783,8 +1119,8 @@ export function NewListingForm() {
                             <Image
                                 src={previewUrl}
                                 alt={`Preview ${index + 1}`}
-                                layout="fill"
-                                objectFit="cover"
+                                fill // Use fill prop
+                                className="object-cover" // Use Tailwind for object-fit
                                 unoptimized // Required for blob URLs
                             />
                             {/* Remove Button Overlay */}
@@ -799,6 +1135,22 @@ export function NewListingForm() {
                             >
                                 <Trash2 className="h-4 w-4" />
                             </Button>
+                            {/* --- Primary Image Indicator/Button --- */}
+                            {index === primaryImageIndex ? (
+                                <div className="absolute bottom-1 left-1 bg-primary text-primary-foreground text-xs px-1.5 py-0.5 rounded z-10">Primary</div>
+                            ) : (
+                                <Button
+                                    type="button"
+                                    variant="secondary"
+                                    size="sm"
+                                    className="absolute bottom-1 left-1 h-6 px-2 text-xs opacity-0 group-hover:opacity-100 transition-opacity z-10 rounded-sm"
+                                    onClick={() => handleSetPrimaryImage(index)}
+                                    disabled={saving}
+                                >
+                                    Set Primary
+                                </Button>
+                            )}
+                            {/* -------------------------------------- */}
                         </div>
                     ))}
                 </div>
@@ -845,16 +1197,16 @@ export function NewListingForm() {
               {/* Tags */}
               <div className="space-y-2">
                   <Label htmlFor="tags">Tags (comma-separated)</Label>
-                  <Input 
-                      id="tags"
-                      name="tags"
-                      value={formData.tags}
-                      onChange={handleChange}
-                      placeholder="e.g., luxury, family-friendly, outdoor"
+                  {/* Changed Input to TagInput and applied correct props */}
+                  <TagInput 
+                     value={(formData.tags || []).join(',')} 
+                     onTagsChange={(newValueString: string) => handleGenericTagInputChange('tags', newValueString)}
+                     placeholder="e.g., luxury, family-friendly, outdoor"
+                     disabled={saving}
                   />
               </div>
               
-              {/* English Address */} 
+              {/* English Address */}
               <div className="space-y-2">
                   <Label htmlFor="location">Location Name / Address (English)</Label>
                   <Textarea
@@ -866,7 +1218,7 @@ export function NewListingForm() {
                   />
               </div>
 
-              {/* Arabic Address */} 
+              {/* Arabic Address */}
               <div className="space-y-2">
                   <Label htmlFor="location_ar">Location Name / Address (Arabic)</Label>
                   <Textarea 
@@ -1011,36 +1363,88 @@ export function NewListingForm() {
                       <Label htmlFor="description_en">Description (English)</Label>
                       <Textarea id="description_en" name="description_en" value={formData.description_en} onChange={handleChange} />
                   </div>
-                  <div className="space-y-2">
-                      <Label htmlFor="opening_hours_en">Opening Hours (English)</Label>
-                      <Input id="opening_hours_en" name="opening_hours_en" value={formData.opening_hours_en} onChange={handleChange} />
-                  </div>
+                  {/* REMOVED old opening_hours_en Input */}
 
                   {/* === Shop/Mall Specific Fields (EN) === */}
                   {formData.listing_type === 'Shop/Mall' && (
                       <>
-                         <div className="space-y-2"><Label htmlFor="popular_stores_en">Popular Stores (English)</Label><Input id="popular_stores_en" name="popular_stores_en" value={formData.popular_stores_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="entertainment_en">Entertainment (English)</Label><Input id="entertainment_en" name="entertainment_en" value={formData.entertainment_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="dining_options_en">Dining Options (English)</Label><Input id="dining_options_en" name="dining_options_en" value={formData.dining_options_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="special_services_en">Special Services (English)</Label><Input id="special_services_en" name="special_services_en" value={formData.special_services_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
+                         <div className="space-y-2">
+                           <Label htmlFor="popular_stores_en">Popular Stores (English) <span className="text-muted-foreground text-xs">(tags)</span></Label>
+                           <TagInput 
+                              value={(formData.popular_stores_en || []).join(',')} 
+                              onTagsChange={(newValueString: string) => handleGenericTagInputChange('popular_stores_en', newValueString)}
+                              placeholder="e.g., Zara, H&M, Apple Store (comma-separated)"
+                              disabled={saving}
+                           />
+                         </div>
+                         <div className="space-y-2">
+                           <Label htmlFor="entertainment_en">Entertainment (English) <span className="text-muted-foreground text-xs">(tags)</span></Label>
+                           <TagInput 
+                              value={(formData.entertainment_en || []).join(',')} 
+                              onTagsChange={(newValueString: string) => handleGenericTagInputChange('entertainment_en', newValueString)}
+                              placeholder="e.g., Cinema, Bowling Alley, Kids Play Area (comma-separated)"
+                              disabled={saving}
+                           />
+                         </div>
+                         <div className="space-y-2">
+                           <Label htmlFor="dining_options_en">Dining Options (English) <span className="text-muted-foreground text-xs">(tags)</span></Label>
+                           <TagInput 
+                              value={(formData.dining_options_en || []).join(',')} 
+                              onTagsChange={(newValueString: string) => handleGenericTagInputChange('dining_options_en', newValueString)}
+                              placeholder="e.g., Food Court, Fine Dining, Cafes (comma-separated)"
+                              disabled={saving}
+                           />
+                         </div>
+                         <div className="space-y-2">
+                           <Label htmlFor="special_services_en">Special Services (English) <span className="text-muted-foreground text-xs">(tags)</span></Label>
+                           <TagInput 
+                              value={(formData.special_services_en || []).join(',')} 
+                              onTagsChange={(newValueString: string) => handleGenericTagInputChange('special_services_en', newValueString)}
+                              placeholder="e.g., Personal Shopper, Valet Parking, Free WiFi (comma-separated)"
+                              disabled={saving}
+                           />
+                         </div>
+                         <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} disabled={saving}/></div>
                      </>
                   )}
 
                   {/* === Restaurant/Café Specific Fields (EN) === */}
                   {formData.listing_type === 'Restaurant/Café' && (
                      <>
-                         <div className="space-y-2"><Label htmlFor="cuisine_type_en">Cuisine Type (English)</Label><Input id="cuisine_type_en" name="cuisine_type_en" value={formData.cuisine_type_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="story_behind_en">Story Behind (English)</Label><Textarea id="story_behind_en" name="story_behind_en" value={formData.story_behind_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="menu_highlights_en">Menu Highlights (English)</Label><Input id="menu_highlights_en" name="menu_highlights_en" value={formData.menu_highlights_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="price_range_en">Price Range (English)</Label><Input id="price_range_en" name="price_range_en" value={formData.price_range_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="dietary_options_en">Dietary Options (English)</Label><Input id="dietary_options_en" name="dietary_options_en" value={formData.dietary_options_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="reservation_info_en">Reservation Info (English)</Label><Input id="reservation_info_en" name="reservation_info_en" value={formData.reservation_info_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="seating_options_en">Seating Options (English)</Label><Input id="seating_options_en" name="seating_options_en" value={formData.seating_options_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="special_features_en">Special Features (English)</Label><Input id="special_features_en" name="special_features_en" value={formData.special_features_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="cuisine_type_en">Cuisine Type (English)</Label><Input id="cuisine_type_en" name="cuisine_type_en" value={formData.cuisine_type_en} onChange={handleChange} disabled={saving}/></div>
+                         <div className="space-y-2"><Label htmlFor="story_behind_en">Story Behind (English)</Label><Textarea id="story_behind_en" name="story_behind_en" value={formData.story_behind_en} onChange={handleChange} disabled={saving}/></div>
+                         <div className="space-y-2">
+                           <Label htmlFor="menu_highlights_en">Menu Highlights (English) <span className="text-muted-foreground text-xs">(tags)</span></Label>
+                           <TagInput 
+                              value={(formData.menu_highlights_en || []).join(',')} 
+                              onTagsChange={(newValueString: string) => handleGenericTagInputChange('menu_highlights_en', newValueString)}
+                              placeholder="e.g., Signature Dish, Best Seller, Local Specialty (comma-separated)"
+                              disabled={saving}
+                           />
+                         </div>
+                         <div className="space-y-2"><Label htmlFor="price_range_en">Price Range (English)</Label><Input id="price_range_en" name="price_range_en" value={formData.price_range_en} onChange={handleChange} disabled={saving}/></div>
+                         <div className="space-y-2">
+                           <Label htmlFor="dietary_options_en">Dietary Options (English) <span className="text-muted-foreground text-xs">(tags)</span></Label>
+                           <TagInput 
+                              value={(formData.dietary_options_en || []).join(',')} 
+                              onTagsChange={(newValueString: string) => handleGenericTagInputChange('dietary_options_en', newValueString)}
+                              placeholder="e.g., Vegetarian, Vegan, Gluten-Free (comma-separated)"
+                              disabled={saving}
+                           />
+                         </div>
+
+                      
+                     
+                         <div className="space-y-2">
+                           <Label htmlFor="special_features_en">Special Features (English) <span className="text-muted-foreground text-xs">(tags)</span></Label>
+                           <TagInput 
+                              value={(formData.special_features_en || []).join(',')} 
+                              onTagsChange={(newValueString: string) => handleGenericTagInputChange('special_features_en', newValueString)}
+                              placeholder="e.g., Live Music, View, Shisha Available (comma-separated)"
+                              disabled={saving}
+                           />
+                         </div>
+                         <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} disabled={saving}/></div>
                      </>
                  )}
 
@@ -1052,8 +1456,16 @@ export function NewListingForm() {
                          <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="tour_guide_availability_en">Tour Guide Availability (English)</Label><Input id="tour_guide_availability_en" name="tour_guide_availability_en" value={formData.tour_guide_availability_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                         {/* Changed Input to TagInput */}
+                         <div className="space-y-2">
+                            <Label htmlFor="facilities_en">Facilities (English) <span className="text-muted-foreground text-xs">(tags)</span></Label>
+                            <TagInput 
+                                value={(formData.facilities_en || []).join(',')}
+                                onTagsChange={(newValueString: string) => handleGenericTagInputChange('facilities_en', newValueString)}
+                                placeholder="e.g., Restrooms, Cafe, Gift Shop (comma-separated)"
+                                disabled={saving}
+                            />
+                         </div>
                          <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
                      </>
                  )}
@@ -1061,12 +1473,29 @@ export function NewListingForm() {
                  {/* === Park/Nature Specific Fields (EN) === */}
                  {formData.listing_type === 'Park/Nature' && (
                      <>
-                         <div className="space-y-2"><Label htmlFor="activities_en">Activities (English)</Label><Input id="activities_en" name="activities_en" value={formData.activities_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
+                         {/* Changed Input to TagInput */}
+                         <div className="space-y-2">
+                            <Label htmlFor="activities_en">Activities (English) <span className="text-muted-foreground text-xs">(tags)</span></Label>
+                            <TagInput 
+                                value={(formData.activities_en || []).join(',')}
+                                onTagsChange={(newValueString: string) => handleGenericTagInputChange('activities_en', newValueString)}
+                                placeholder="e.g., Hiking, Picnicking, Bird Watching (comma-separated)"
+                                disabled={saving}
+                            />
+                         </div>
+                         {/* Changed Input to TagInput */}
+                         <div className="space-y-2">
+                            <Label htmlFor="facilities_en">Facilities (English) <span className="text-muted-foreground text-xs">(tags)</span></Label>
+                            <TagInput 
+                                value={(formData.facilities_en || []).join(',')}
+                                onTagsChange={(newValueString: string) => handleGenericTagInputChange('facilities_en', newValueString)}
+                                placeholder="e.g., Trails, Picnic Areas, Visitor Center (comma-separated)"
+                                disabled={saving}
+                            />
+                         </div>
                          <div className="space-y-2"><Label htmlFor="safety_tips_en">Safety Tips (English)</Label><Textarea id="safety_tips_en" name="safety_tips_en" value={formData.safety_tips_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="entry_fee_en">Entry Fee (English)</Label><Input id="entry_fee_en" name="entry_fee_en" value={formData.entry_fee_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
                      </>
                  )}
@@ -1075,11 +1504,19 @@ export function NewListingForm() {
                  {formData.listing_type === 'Experience' && (
                      <>
                          <div className="space-y-2"><Label htmlFor="duration_en">Duration (English)</Label><Input id="duration_en" name="duration_en" value={formData.duration_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="highlights_en">Highlights (English)</Label><Input id="highlights_en" name="highlights_en" value={formData.highlights_en} onChange={handleChange} /></div>
+                         {/* Changed Input to TagInput */}
+                         <div className="space-y-2">
+                            <Label htmlFor="highlights_en">Highlights (English) <span className="text-muted-foreground text-xs">(tags)</span></Label>
+                            <TagInput 
+                                value={(formData.highlights_en || []).join(',')}
+                                onTagsChange={(newValueString: string) => handleGenericTagInputChange('highlights_en', newValueString)}
+                                placeholder="e.g., Hands-on activity, Unique view, Cultural insight (comma-separated)"
+                                disabled={saving}
+                            />
+                         </div>
                          <div className="space-y-2"><Label htmlFor="price_range_en">Price Range (English)</Label><Input id="price_range_en" name="price_range_en" value={formData.price_range_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="safety_tips_en">Safety Tips (English)</Label><Textarea id="safety_tips_en" name="safety_tips_en" value={formData.safety_tips_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
                      </>
                  )}
@@ -1091,10 +1528,27 @@ export function NewListingForm() {
                          <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="tour_guide_availability_en">Tour Guide Availability (English)</Label><Input id="tour_guide_availability_en" name="tour_guide_availability_en" value={formData.tour_guide_availability_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                         {/* Changed Input to TagInput */}
+                         <div className="space-y-2">
+                            <Label htmlFor="facilities_en">Facilities (English) <span className="text-muted-foreground text-xs">(tags)</span></Label>
+                            <TagInput 
+                                value={(formData.facilities_en || []).join(',')}
+                                onTagsChange={(newValueString: string) => handleGenericTagInputChange('facilities_en', newValueString)}
+                                placeholder="e.g., Cafe, Gift Shop, Wheelchair Access (comma-separated)"
+                                disabled={saving}
+                            />
+                         </div>
                          <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="highlights_en">Highlights (English)</Label><Input id="highlights_en" name="highlights_en" value={formData.highlights_en} onChange={handleChange} /></div>
+                         {/* Changed Input to TagInput */}
+                         <div className="space-y-2">
+                            <Label htmlFor="highlights_en">Highlights (English) <span className="text-muted-foreground text-xs">(tags)</span></Label>
+                            <TagInput 
+                                value={(formData.highlights_en || []).join(',')}
+                                onTagsChange={(newValueString: string) => handleGenericTagInputChange('highlights_en', newValueString)}
+                                placeholder="e.g., Famous Exhibits, Interactive Displays, Rare Artifacts (comma-separated)"
+                                disabled={saving}
+                            />
+                         </div>
                      </>
                  )}
 
@@ -1105,8 +1559,16 @@ export function NewListingForm() {
                          <div className="space-y-2"><Label htmlFor="entry_rules_en">Entry Rules (English)</Label><Textarea id="entry_rules_en" name="entry_rules_en" value={formData.entry_rules_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                         {/* Changed Input to TagInput */}
+                         <div className="space-y-2">
+                            <Label htmlFor="facilities_en">Facilities (English) <span className="text-muted-foreground text-xs">(tags)</span></Label>
+                            <TagInput 
+                                value={(formData.facilities_en || []).join(',')}
+                                onTagsChange={(newValueString: string) => handleGenericTagInputChange('facilities_en', newValueString)}
+                                placeholder="e.g., Prayer Area, Ablution Facilities, Information Desk (comma-separated)"
+                                disabled={saving}
+                            />
+                         </div>
                          <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
                      </>
                  )}
@@ -1121,16 +1583,51 @@ export function NewListingForm() {
                   <div className="space-y-2"><Label htmlFor="name_ar">Name (Arabic) *</Label><Input dir="rtl" id="name_ar" name="name_ar" value={formData.name_ar} onChange={handleChange} required /></div>
                   <div className="space-y-2"><Label htmlFor="slug_ar">Slug (Arabic)</Label><Input dir="rtl" id="slug_ar" name="slug_ar" value={formData.slug_ar} onChange={handleChange} /></div>
                   <div className="space-y-2"><Label htmlFor="description_ar">Description (Arabic)</Label><Textarea dir="rtl" id="description_ar" name="description_ar" value={formData.description_ar} onChange={handleChange} /></div>
-                  <div className="space-y-2"><Label htmlFor="opening_hours_ar">Opening Hours (Arabic)</Label><Input dir="rtl" id="opening_hours_ar" name="opening_hours_ar" value={formData.opening_hours_ar} onChange={handleChange} /></div>
+                  {/* REMOVED old opening_hours_ar Input */}
 
                   {/* === Shop/Mall Specific Fields (AR) === */}
                   {formData.listing_type === 'Shop/Mall' && (
                       <>
-                         <div className="space-y-2"><Label htmlFor="popular_stores_ar">Popular Stores (Arabic)</Label><Input dir="rtl" id="popular_stores_ar" name="popular_stores_ar" value={formData.popular_stores_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="entertainment_ar">Entertainment (Arabic)</Label><Input dir="rtl" id="entertainment_ar" name="entertainment_ar" value={formData.entertainment_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="dining_options_ar">Dining Options (Arabic)</Label><Input dir="rtl" id="dining_options_ar" name="dining_options_ar" value={formData.dining_options_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="special_services_ar">Special Services (Arabic)</Label><Input dir="rtl" id="special_services_ar" name="special_services_ar" value={formData.special_services_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2">
+                            <Label htmlFor="popular_stores_ar">Popular Stores (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                            {/* Changed Input to TagInput */}
+                            <TagInput 
+                                value={(formData.popular_stores_ar || []).join(',')}
+                                onTagsChange={(newValueString: string) => handleGenericTagInputChange('popular_stores_ar', newValueString)}
+                                placeholder="مثال: زارا، إتش آند إم، متجر أبل (مفصولة بفواصل)"
+                                disabled={saving}
+                            />
+                         </div>
+                         <div className="space-y-2">
+                            <Label htmlFor="entertainment_ar">Entertainment (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                            {/* Changed Input to TagInput */}
+                            <TagInput 
+                                value={(formData.entertainment_ar || []).join(',')}
+                                onTagsChange={(newValueString: string) => handleGenericTagInputChange('entertainment_ar', newValueString)}
+                                placeholder="مثال: سينما، صالة بولينغ، منطقة لعب أطفال (مفصولة بفواصل)"
+                                disabled={saving}
+                            />
+                         </div>
+                         <div className="space-y-2">
+                            <Label htmlFor="dining_options_ar">Dining Options (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                            {/* Changed Input to TagInput */}
+                            <TagInput 
+                                value={(formData.dining_options_ar || []).join(',')}
+                                onTagsChange={(newValueString: string) => handleGenericTagInputChange('dining_options_ar', newValueString)}
+                                placeholder="مثال: ردهة طعام، مطاعم فاخرة، مقاهي (مفصولة بفواصل)"
+                                disabled={saving}
+                            />
+                         </div>
+                         <div className="space-y-2">
+                            <Label htmlFor="special_services_ar">Special Services (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                            {/* Changed Input to TagInput */}
+                            <TagInput 
+                                value={(formData.special_services_ar || []).join(',')}
+                                onTagsChange={(newValueString: string) => handleGenericTagInputChange('special_services_ar', newValueString)}
+                                placeholder="مثال: متسوق شخصي، خدمة صف السيارات، واي فاي مجاني (مفصولة بفواصل)"
+                                disabled={saving}
+                            />
+                         </div>
                          <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
                       </>
                   )}
@@ -1138,16 +1635,38 @@ export function NewListingForm() {
                   {/* === Restaurant/Café Specific Fields (AR) === */}
                   {formData.listing_type === 'Restaurant/Café' && (
                      <>
-                         <div className="space-y-2"><Label htmlFor="cuisine_type_ar">Cuisine Type (Arabic)</Label><Input dir="rtl" id="cuisine_type_ar" name="cuisine_type_ar" value={formData.cuisine_type_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="story_behind_ar">Story Behind (Arabic)</Label><Textarea dir="rtl" id="story_behind_ar" name="story_behind_ar" value={formData.story_behind_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="menu_highlights_ar">Menu Highlights (Arabic)</Label><Input dir="rtl" id="menu_highlights_ar" name="menu_highlights_ar" value={formData.menu_highlights_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="price_range_ar">Price Range (Arabic)</Label><Input dir="rtl" id="price_range_ar" name="price_range_ar" value={formData.price_range_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="dietary_options_ar">Dietary Options (Arabic)</Label><Input dir="rtl" id="dietary_options_ar" name="dietary_options_ar" value={formData.dietary_options_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="reservation_info_ar">Reservation Info (Arabic)</Label><Input dir="rtl" id="reservation_info_ar" name="reservation_info_ar" value={formData.reservation_info_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="seating_options_ar">Seating Options (Arabic)</Label><Input dir="rtl" id="seating_options_ar" name="seating_options_ar" value={formData.seating_options_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="special_features_ar">Special Features (Arabic)</Label><Input dir="rtl" id="special_features_ar" name="special_features_ar" value={formData.special_features_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="cuisine_type_ar">Cuisine Type (Arabic)</Label><Input dir="rtl" id="cuisine_type_ar" name="cuisine_type_ar" value={formData.cuisine_type_ar} onChange={handleChange} disabled={saving}/></div>
+                         <div className="space-y-2"><Label htmlFor="story_behind_ar">Story Behind (Arabic)</Label><Textarea dir="rtl" id="story_behind_ar" name="story_behind_ar" value={formData.story_behind_ar} onChange={handleChange} disabled={saving}/></div>
+                         <div className="space-y-2">
+                           <Label htmlFor="menu_highlights_ar">Menu Highlights (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                           <TagInput 
+                              value={(formData.menu_highlights_ar || []).join(',')} 
+                              onTagsChange={(newValueString: string) => handleGenericTagInputChange('menu_highlights_ar', newValueString)}
+                              placeholder="مثال: الطبق المميز، الأكثر مبيعاً، طبق محلي خاص (مفصولة بفواصل)"
+                              disabled={saving}
+                           />
+                         </div>
+                         <div className="space-y-2"><Label htmlFor="price_range_ar">Price Range (Arabic)</Label><Input dir="rtl" id="price_range_ar" name="price_range_ar" value={formData.price_range_ar} onChange={handleChange} disabled={saving}/></div>
+                         <div className="space-y-2">
+                           <Label htmlFor="dietary_options_ar">Dietary Options (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                           <TagInput 
+                              value={(formData.dietary_options_ar || []).join(',')} 
+                              onTagsChange={(newValueString: string) => handleGenericTagInputChange('dietary_options_ar', newValueString)}
+                              placeholder="مثال: نباتي، نباتي صرف، خالي من الغلوتين (مفصولة بفواصل)"
+                              disabled={saving}
+                           />
+                         </div>
+
+                         <div className="space-y-2">
+                           <Label htmlFor="special_features_ar">Special Features (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                           <TagInput 
+                              value={(formData.special_features_ar || []).join(',')} 
+                              onTagsChange={(newValueString: string) => handleGenericTagInputChange('special_features_ar', newValueString)}
+                              placeholder="مثال: موسيقى حية، إطلالة، شيشة متوفرة (مفصولة بفواصل)"
+                              disabled={saving}
+                           />
+                         </div>
+                         <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} disabled={saving}/></div>
                      </>
                  )}
 
@@ -1159,8 +1678,17 @@ export function NewListingForm() {
                          <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="tour_guide_availability_ar">Tour Guide Availability (Arabic)</Label><Input dir="rtl" id="tour_guide_availability_ar" name="tour_guide_availability_ar" value={formData.tour_guide_availability_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2">
+                           <Label htmlFor="facilities_ar">Facilities (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                           {/* Changed Input to TagInput */}
+                           <TagInput 
+                               value={(formData.facilities_ar || []).join(',')}
+                               onTagsChange={(newValueString: string) => handleGenericTagInputChange('facilities_ar', newValueString)}
+                               placeholder="مثال: مراحيض، مقهى، متجر هدايا (مفصولة بفواصل)"
+                               disabled={saving}
+                           />
+                         </div>
+
                          <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
                      </>
                  )}
@@ -1168,13 +1696,34 @@ export function NewListingForm() {
                  {/* === Park/Nature Specific Fields (AR) === */}
                  {formData.listing_type === 'Park/Nature' && (
                      <>
-                         <div className="space-y-2"><Label htmlFor="activities_ar">Activities (Arabic)</Label><Input dir="rtl" id="activities_ar" name="activities_ar" value={formData.activities_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2">
+                           <Label htmlFor="activities_ar">Activities (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                           {/* Changed Input to TagInput */}
+                           <TagInput 
+                               value={(formData.activities_ar || []).join(',')}
+                               onTagsChange={(newValueString: string) => handleGenericTagInputChange('activities_ar', newValueString)}
+                               placeholder="مثال: المشي لمسافات طويلة، التنزه، مراقبة الطيور (مفصولة بفواصل)"
+                               disabled={saving}
+                           />
+                         </div>
+                         <div className="space-y-2">
+                           <Label htmlFor="facilities_ar">Facilities (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                           {/* Changed Input to TagInput */}
+                           <TagInput 
+                               value={(formData.facilities_ar || []).join(',')}
+                               onTagsChange={(newValueString: string) => handleGenericTagInputChange('facilities_ar', newValueString)}
+                               placeholder="مثال: مسارات، مناطق نزهة، مركز زوار (مفصولة بفواصل)"
+                               disabled={saving}
+                           />
+                         </div>
                          <div className="space-y-2"><Label htmlFor="safety_tips_ar">Safety Tips (Arabic)</Label><Textarea dir="rtl" id="safety_tips_ar" name="safety_tips_ar" value={formData.safety_tips_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="entry_fee_ar">Entry Fee (Arabic)</Label><Input dir="rtl" id="entry_fee_ar" name="entry_fee_ar" value={formData.entry_fee_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2">
+
+                           
+                         </div>
+                         <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} disabled={saving}/></div>
                      </>
                  )}
 
@@ -1182,12 +1731,20 @@ export function NewListingForm() {
                  {formData.listing_type === 'Experience' && (
                      <>
                          <div className="space-y-2"><Label htmlFor="duration_ar">Duration (Arabic)</Label><Input dir="rtl" id="duration_ar" name="duration_ar" value={formData.duration_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="highlights_ar">Highlights (Arabic)</Label><Input dir="rtl" id="highlights_ar" name="highlights_ar" value={formData.highlights_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="price_range_ar">Price Range (Arabic)</Label><Input dir="rtl" id="price_range_ar" name="price_range_ar" value={formData.price_range_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="safety_tips_ar">Safety Tips (Arabic)</Label><Textarea dir="rtl" id="safety_tips_ar" name="safety_tips_ar" value={formData.safety_tips_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2">
+                           <Label htmlFor="highlights_ar">Highlights (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                           <TagInput 
+                              value={(formData.highlights_ar || []).join(',')} 
+                              onTagsChange={(newValueString: string) => handleGenericTagInputChange('highlights_ar', newValueString)}
+                              placeholder="مثال: المعروضات الرئيسية، العروض التفاعلية، الأهمية التاريخية (مفصولة بفواصل)"
+                              disabled={saving}
+                           />
+                         </div>
+                         <div className="space-y-2"><Label htmlFor="price_range_ar">Price Range (Arabic)</Label><Input dir="rtl" id="price_range_ar" name="price_range_ar" value={formData.price_range_ar} onChange={handleChange} disabled={saving}/></div>
+                         <div className="space-y-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} disabled={saving}/></div>
+                         <div className="space-y-2"><Label htmlFor="safety_tips_ar">Safety Tips (Arabic)</Label><Textarea dir="rtl" id="safety_tips_ar" name="safety_tips_ar" value={formData.safety_tips_ar} onChange={handleChange} disabled={saving}/></div>
+
+                         <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} disabled={saving}/></div>
                      </>
                  )}
 
@@ -1198,10 +1755,27 @@ export function NewListingForm() {
                          <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="tour_guide_availability_ar">Tour Guide Availability (Arabic)</Label><Input dir="rtl" id="tour_guide_availability_ar" name="tour_guide_availability_ar" value={formData.tour_guide_availability_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2">
+                           <Label htmlFor="facilities_ar">Facilities (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                           {/* Changed Input to TagInput */}
+                           <TagInput 
+                               value={(formData.facilities_ar || []).join(',')}
+                               onTagsChange={(newValueString: string) => handleGenericTagInputChange('facilities_ar', newValueString)}
+                               placeholder="مثال: مقهى، متجر هدايا، وصول للكراسي المتحركة (مفصولة بفواصل)"
+                               disabled={saving}
+                           />
+                         </div>
                          <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="highlights_ar">Highlights (Arabic)</Label><Input dir="rtl" id="highlights_ar" name="highlights_ar" value={formData.highlights_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2">
+                           <Label htmlFor="highlights_ar">Highlights (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                           {/* Changed Input to TagInput */}
+                           <TagInput 
+                               value={(formData.highlights_ar || []).join(',')}
+                               onTagsChange={(newValueString: string) => handleGenericTagInputChange('highlights_ar', newValueString)}
+                               placeholder="مثال: معروضات مشهورة، تركيبات تفاعلية، قطع نادرة (مفصولة بفواصل)"
+                               disabled={saving}
+                           />
+                         </div>
                      </>
                  )}
 
@@ -1210,16 +1784,38 @@ export function NewListingForm() {
                      <>
                          <div className="space-y-2"><Label htmlFor="religious_significance_ar">Religious Significance (Arabic)</Label><Textarea dir="rtl" id="religious_significance_ar" name="religious_significance_ar" value={formData.religious_significance_ar} onChange={handleChange} /></div>
                          <div className="space-y-2"><Label htmlFor="entry_rules_ar">Entry Rules (Arabic)</Label><Textarea dir="rtl" id="entry_rules_ar" name="entry_rules_ar" value={formData.entry_rules_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
-                         <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
+                         <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} disabled={saving}/></div>
+                         <div className="space-y-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} disabled={saving}/></div>
+                         <div className="space-y-2">
+                           <Label htmlFor="facilities_ar">Facilities (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                           {/* Changed Input to TagInput */}
+                           <TagInput 
+                               value={(formData.facilities_ar || []).join(',')}
+                               onTagsChange={(newValueString: string) => handleGenericTagInputChange('facilities_ar', newValueString)}
+                               placeholder="مثال: مقاعد، دورات مياه عامة، كشك معلومات (مفصولة بفواصل)"
+                               disabled={saving}
+                           />
+                         </div>
+                         <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} disabled={saving}/></div>
                      </>
                  )}
               </CardContent>
           </Card>
       </div> { /* End Side-by-Side Language Content */ }
+
+      {/* Add Opening Hours section */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Opening Hours</CardTitle>
+          <CardDescription>Set the opening hours for each day of the week</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <OpeningHoursInput
+            value={formData.opening_hours}
+            onChange={handleOpeningHoursChange}
+          />
+        </CardContent>
+      </Card>
 
       {/* Submit Buttons */}
       <div className="flex justify-end gap-3 mt-8">

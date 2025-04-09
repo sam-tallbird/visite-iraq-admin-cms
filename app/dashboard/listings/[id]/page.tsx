@@ -84,6 +84,9 @@ export default function ViewListingPage() {
     if (!listingId) {
       console.error("No Listing ID found, redirecting...");
       router.push("/dashboard/listings");
+    } else if (listingId === 'all') {
+      console.warn(`Invalid Listing ID '${listingId}' detected, redirecting...`);
+      router.push("/dashboard/listings");
     }
   }, [listingId, router]);
   

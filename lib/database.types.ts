@@ -489,6 +489,7 @@ export type Database = {
       location_translations: {
         Row: {
           address: string | null
+          city: string // Manually Added
           description: string | null
           id: string
           language_code: string
@@ -497,6 +498,7 @@ export type Database = {
         }
         Insert: {
           address?: string | null
+          city: string // Manually Added
           description?: string | null
           id?: string
           language_code: string
@@ -505,6 +507,7 @@ export type Database = {
         }
         Update: {
           address?: string | null
+          city?: string // Manually Added (Optional on update)
           description?: string | null
           id?: string
           language_code?: string
@@ -852,3 +855,5 @@ export type CompositeTypes<
   : PublicCompositeTypeNameOrOptions extends keyof PublicSchema["CompositeTypes"]
     ? PublicSchema["CompositeTypes"][PublicCompositeTypeNameOrOptions]
     : never
+
+export {}; // Ensure file is treated as a module

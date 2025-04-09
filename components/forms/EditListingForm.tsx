@@ -10,6 +10,7 @@ import {
   ImagePlus,
   ArrowLeft,
   DownloadCloud,
+  LinkIcon,
 } from "lucide-react";
 import { useSupabaseRow, useSupabaseTable } from "@/hooks/use-supabase";
 import { ListingImageManager } from "@/components/ListingImageManager";
@@ -27,6 +28,8 @@ import { MapDisplay } from "@/components/maps/MapDisplay";
 import { Switch } from "@/components/ui/switch";
 import { createClient } from "@/lib/supabase/client";
 import { Database } from "@/lib/database.types";
+import { TagInput } from "@/components/ui/TagInput";
+import { OpeningHoursInput, OpeningHoursData } from './OpeningHoursInput';
 
 // --- Add IRAQ_PROVINCES Constant ---
 const IRAQ_PROVINCES = [
@@ -77,15 +80,15 @@ interface ListingTranslation {
   entertainment?: string[] | null;
   dining_options?: string[] | null;
   special_services?: string[] | null;
-  nearby_attractions?: string[] | null;
+ 
   parking_info?: string | null;
   cuisine_type?: string | null;
   story_behind?: string | null;
   menu_highlights?: string[] | null;
   price_range?: string | null;
   dietary_options?: string[] | null;
-  reservation_info?: string | null;
-  seating_options?: string[] | null;
+  
+  
   special_features?: string[] | null;
   historical_significance?: string | null;
   entry_fee?: string | null;
@@ -160,109 +163,186 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
   const { supabase, loading: authLoading } = useAuth();
   const [saving, setSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [isFetchingLocation, setIsFetchingLocation] = useState(false); // <-- Add this line
-  const [translationEn, setTranslationEn] = useState<ListingTranslation | null>(
-    null
-  );
-  const [translationAr, setTranslationAr] = useState<ListingTranslation | null>(
-    null
-  );
-  const [existingCategoryLinks, setExistingCategoryLinks] = useState<
-    ListingCategoryLink[]
-  >([]);
-  // REMOVED: const [displayCategories, setDisplayCategories] = useState<DisplayCategory[]>([])
-  
-  // const [isInitialDataLoaded, setIsInitialDataLoaded] = useState(false); // REMOVE OLD FLAG
-  const [isLoadingCoreData, setIsLoadingCoreData] = useState(true); // NEW: Tracks core data loading
-  const [hasPopulatedForm, setHasPopulatedForm] = useState(false);    // NEW: Tracks if form has been populated once
-  
+  const [isFetchingLocation, setIsFetchingLocation] = useState(false);
+  // REMOVED: Unused translation state
+  // const [translationEn, setTranslationEn] = useState<ListingTranslation | null>(null);
+  // const [translationAr, setTranslationAr] = useState<ListingTranslation | null>(null);
+  // const [existingCategoryLinks, setExistingCategoryLinks] = useState<ListingCategoryLink[]>([]);
+
+  // REMOVED: Old/unused loading/populated flags
+  // const [isLoadingCoreData, setIsLoadingCoreData] = useState(true); 
+  // const [hasPopulatedForm, setHasPopulatedForm] = useState(false); 
+
+  // --- NEW: Flag to track if initial population is complete ---
+  const [initialPopulationDone, setInitialPopulationDone] = useState(false); 
+  // -----------------------------------------------------------
+
   const [availableCollections, setAvailableCollections] = useState<CuratedCollection[]>([]);
   const [collectionSelections, setCollectionSelections] = useState<CollectionSelectionState>({});
   const [collectionsLoading, setCollectionsLoading] = useState(true);
-  
-  const [formData, setFormData] = useState({
-    // Listings Table Fields
+
+  // Define the type for the form data state (UPDATED)
+  type FormDataState = {
+    location: string;
+    location_ar: string;
+    google_maps_link: string;
+    latitude: string;
+    longitude: string;
+    location_id: string | null;
+    google_place_id: string | null;
+    tags: string[]; 
+    listing_type: string;
+    city_en: string;
+    city_ar: string;
+    opening_hours: OpeningHoursData; // <-- UPDATED
+    // English fields
+    name_en: string;
+    description_en: string;
+    popular_stores_en: string[]; 
+    entertainment_en: string[]; 
+    dining_options_en: string[]; 
+    special_services_en: string[]; 
+   
+    parking_info_en: string;
+    cuisine_type_en: string;
+    story_behind_en: string;
+    menu_highlights_en: string[]; 
+    price_range_en: string;
+    dietary_options_en: string[]; 
+    special_features_en: string[]; 
+    historical_significance_en: string;
+    entry_fee_en: string;
+    best_time_to_visit_en: string;
+    tour_guide_availability_en: string;
+    tips_en: string;
+    activities_en: string[]; 
+    facilities_en: string[]; 
+    safety_tips_en: string[]; 
+    duration_en: string;
+    highlights_en: string[]; 
+    religious_significance_en: string;
+    entry_rules_en: string;
+    slug_en: string;
+    // Arabic fields
+    name_ar: string;
+    description_ar: string;
+    popular_stores_ar: string[]; 
+    entertainment_ar: string[]; 
+    dining_options_ar: string[]; 
+    special_services_ar: string[]; 
+
+    parking_info_ar: string;
+    cuisine_type_ar: string;
+    story_behind_ar: string;
+    menu_highlights_ar: string[]; 
+    price_range_ar: string;
+    dietary_options_ar: string[]; 
+    special_features_ar: string[]; 
+    historical_significance_ar: string;
+    entry_fee_ar: string;
+    best_time_to_visit_ar: string;
+    tour_guide_availability_ar: string;
+    tips_ar: string;
+    activities_ar: string[]; 
+    facilities_ar: string[]; 
+    safety_tips_ar: string[]; 
+    duration_ar: string;
+    highlights_ar: string[]; 
+    religious_significance_ar: string;
+    entry_rules_ar: string;
+    slug_ar: string;
+    // Other
+    categoryIds: string[];
+    seating_options_en: string[];
+    seating_options_ar: string[];
+  };
+
+  // --- Default Opening Hours Structure (ADDED/UPDATED) ---
+  const defaultOpeningHours: OpeningHoursData = {
+      Monday: { isOpen: false, is24Hours: false, open: '09:00', close: '17:00', notes_en: '', notes_ar: '' },
+      Tuesday: { isOpen: false, is24Hours: false, open: '09:00', close: '17:00', notes_en: '', notes_ar: '' },
+      Wednesday: { isOpen: false, is24Hours: false, open: '09:00', close: '17:00', notes_en: '', notes_ar: '' },
+      Thursday: { isOpen: false, is24Hours: false, open: '09:00', close: '17:00', notes_en: '', notes_ar: '' },
+      Friday: { isOpen: false, is24Hours: false, open: '09:00', close: '17:00', notes_en: '', notes_ar: '' },
+      Saturday: { isOpen: false, is24Hours: false, open: '09:00', close: '17:00', notes_en: '', notes_ar: '' },
+      Sunday: { isOpen: false, is24Hours: false, open: '09:00', close: '17:00', notes_en: '', notes_ar: '' },
+  };
+  // -------------------------------------------------------
+
+  // Initial form state (REMOVE old fields)
+  const initialFormData: FormDataState = {
     location: "",
     location_ar: "",
     google_maps_link: "",
     latitude: "",
     longitude: "",
-    location_id: null as string | null,
-    google_place_id: null as string | null, // <-- Add state for place_id
-    tags: "", // Array represented as comma-separated string
+    location_id: null,
+    google_place_id: null,
+    tags: [], 
     listing_type: "",
-    // --- Add City fields ---
     city_en: "",
     city_ar: "",
-    // ---------------------
-
-    // Listing Translations Fields (EN)
+    opening_hours: defaultOpeningHours, // Keep this
     name_en: "",
     description_en: "",
-    opening_hours_en: "",
-    popular_stores_en: "",
-    entertainment_en: "",
-    dining_options_en: "",
-    special_services_en: "",
-    nearby_attractions_en: "",
+    popular_stores_en: [], 
+    entertainment_en: [], 
+    dining_options_en: [], 
+    special_services_en: [], 
+   
     parking_info_en: "",
     cuisine_type_en: "",
     story_behind_en: "",
-    menu_highlights_en: "",
+    menu_highlights_en: [], 
     price_range_en: "",
-    dietary_options_en: "",
-    reservation_info_en: "",
-    seating_options_en: "",
-    special_features_en: "",
+    dietary_options_en: [], 
+    special_features_en: [], 
     historical_significance_en: "",
     entry_fee_en: "",
     best_time_to_visit_en: "",
     tour_guide_availability_en: "",
     tips_en: "",
-    activities_en: "",
-    facilities_en: "",
-    safety_tips_en: "",
+    activities_en: [], 
+    facilities_en: [], 
+    safety_tips_en: [], 
     duration_en: "",
-    highlights_en: "",
+    highlights_en: [], 
     religious_significance_en: "",
     entry_rules_en: "",
     slug_en: "",
-
-    // Listing Translations Fields (AR)
     name_ar: "",
     description_ar: "",
-    opening_hours_ar: "",
-    popular_stores_ar: "",
-    entertainment_ar: "",
-    dining_options_ar: "",
-    special_services_ar: "",
-    nearby_attractions_ar: "",
+    popular_stores_ar: [], 
+    entertainment_ar: [], 
+    dining_options_ar: [], 
+    special_services_ar: [], 
+   
     parking_info_ar: "",
     cuisine_type_ar: "",
     story_behind_ar: "",
-    menu_highlights_ar: "",
+    menu_highlights_ar: [], 
     price_range_ar: "",
-    dietary_options_ar: "",
-    reservation_info_ar: "",
-    seating_options_ar: "",
-    special_features_ar: "",
+    dietary_options_ar: [], 
+    special_features_ar: [], 
     historical_significance_ar: "",
     entry_fee_ar: "",
     best_time_to_visit_ar: "",
     tour_guide_availability_ar: "",
     tips_ar: "",
-    activities_ar: "",
-    facilities_ar: "",
-    safety_tips_ar: "",
+    activities_ar: [], 
+    facilities_ar: [], 
+    safety_tips_ar: [], 
     duration_ar: "",
-    highlights_ar: "",
+    highlights_ar: [], 
     religious_significance_ar: "",
     entry_rules_ar: "",
     slug_ar: "",
+    categoryIds: [],
+    seating_options_en: [],
+    seating_options_ar: [],
+  };
 
-    // Other Fields
-    categoryIds: [] as string[],
-  });
+  const [formData, setFormData] = useState<FormDataState>(initialFormData);
 
   // --- Log formData right after useState ---
   console.log("[EditListingForm] formData state immediately after useState:", JSON.stringify(formData).substring(0, 100) + "...");
@@ -277,9 +357,8 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
     data: listing, 
     status: listingStatus,
     error: listingError,
-    refresh: refreshListing,
-    update: updateListingRow,
-  } = useSupabaseRow("listings", listingId);
+    refresh: refreshListing
+  } = useSupabaseRow('listings', listingId);
 
   const {
     data: allTranslations,
@@ -291,57 +370,57 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
     data: allCategoryLinks,
     status: linksStatus,
     error: linksError,
-    add: addListingCategoryLink,
-    remove: removeListingCategoryLink,
+    // Removed unused add/remove
+    // add: addListingCategoryLink,
+    // remove: removeListingCategoryLink,
   } = useSupabaseTable("listing_categories");
 
-  const {
-    categories: baseCategories,
-    loading: categoriesLoading,
+  const { 
+    categories: baseCategories, 
+    loading: categoriesLoading, 
     error: categoriesError,
   } = useCategories();
-
+  
   const {
     data: allCategoryTranslations,
     status: categoryTranslationsStatus,
     error: categoryTranslationsError,
   } = useSupabaseTable("category_translations");
 
-  // --- ADDED: Memoize the combined categories (mirrors NewListingForm) ---
+  // --- Memoize combined categories (no change) ---
   const combinedDisplayCategories = useMemo(() => {
+    // ... same memoization logic ...
     if (baseCategories && allCategoryTranslations) {
-      console.log("[EditListingForm] Memoizing combined categories...");
+     console.log("[EditListingForm] Memoizing combined categories...");
       const combined = baseCategories.map((cat) => {
         const en = allCategoryTranslations.find(
-          (t) => t.category_id === cat.id && t.language_code === "en"
-        );
+         (t) => t.category_id === cat.id && t.language_code === "en"
+       );
         const ar = allCategoryTranslations.find(
-          (t) => t.category_id === cat.id && t.language_code === "ar"
-        );
-        return {
-          ...cat,
-          name_en: en?.name,
-          name_ar: ar?.name,
-        } as DisplayCategory;
-      });
-      combined.sort((a, b) => (a.name_en ?? "").localeCompare(b.name_en ?? ""));
-      console.log("[EditListingForm] Combined categories memoized.");
-      return combined;
-    }
+         (t) => t.category_id === cat.id && t.language_code === "ar"
+       );
+       return {
+         ...cat,
+         name_en: en?.name,
+         name_ar: ar?.name,
+       } as DisplayCategory;
+     });
+     combined.sort((a, b) => (a.name_en ?? "").localeCompare(b.name_en ?? ""));
+     console.log("[EditListingForm] Combined categories memoized.");
+     return combined;
+   }
     return []; // Return empty array if data not ready
   }, [baseCategories, allCategoryTranslations]); // Depend only on direct data sources
 
-  const loading =
-    authLoading ||
-    listingStatus === "loading" ||
-    listingStatus === "idle" ||
-    translationsStatus === "loading" ||
-    translationsStatus === "idle" ||
-    linksStatus === "loading" ||
-    linksStatus === "idle" ||
-    categoriesLoading ||
-    categoryTranslationsStatus === "loading" ||
-    categoryTranslationsStatus === "idle";
+  // Consolidated loading state check
+  const isInitialDataLoading = 
+      authLoading ||
+      listingStatus === "loading" || listingStatus === "idle" ||
+      translationsStatus === "loading" || translationsStatus === "idle" ||
+      linksStatus === "loading" || linksStatus === "idle" ||
+      categoriesLoading || // Base categories
+      categoryTranslationsStatus === "loading" || categoryTranslationsStatus === "idle"; 
+
   const combinedError =
     listingError ||
     translationsError ||
@@ -371,12 +450,12 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
         (t) => t.listing_id === listingId && t.language_code === "ar"
       ) as ListingTranslation | null;
       console.log("[EditListingForm] Found EN:", en ? 'Yes' : 'No', "Found AR:", ar ? 'Yes' : 'No');
-      setTranslationEn(en);
-      setTranslationAr(ar);
+      // setTranslationEn(en);
+      // setTranslationAr(ar);
     } else {
       console.log("[EditListingForm] All translations not yet available or no listingId.");
-      setTranslationEn(null); // Reset if listingId changes or translations disappear
-      setTranslationAr(null);
+      // setTranslationEn(null); // Reset if listingId changes or translations disappear
+      // setTranslationAr(null);
     }
 
     if (allCategoryLinks && listingId) {
@@ -385,16 +464,16 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
         (link) => link.listing_id === listingId
       ) as ListingCategoryLink[];
        console.log(`[EditListingForm] Found ${links.length} category links for this listing.`);
-      setExistingCategoryLinks(links);
+      // setExistingCategoryLinks(links);
     } else {
        console.log("[EditListingForm] All category links not yet available or no listingId.");
-      setExistingCategoryLinks([]); // Reset
+      // setExistingCategoryLinks([]); // Reset
     }
   }, [allTranslations, allCategoryLinks, listingId]);
 
   // --- NEW Effect to track core data loading status --- 
   useEffect(() => {
-      const coreDataIsLoading = 
+       const coreDataIsLoading = 
           listingStatus === "loading" ||
           listingStatus === "idle" ||
           translationsStatus === "loading" ||
@@ -404,262 +483,249 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
           
       if (!coreDataIsLoading) {
           console.log("%c[EditListingForm] Core data (listing, translations, links) has finished loading.", "color: #999;");
-          setIsLoadingCoreData(false);
+          // setIsLoadingCoreData(false);
       } else {
            console.log("%c[EditListingForm] Core data is still loading...", "color: #999;");
           // Ensure it's true if any dependency is still loading
-          setIsLoadingCoreData(true); 
+          // setIsLoadingCoreData(true); 
       }
   }, [listingStatus, translationsStatus, linksStatus]);
   // ----------------------------------------------------
 
-  // --- REVISED: Effect to Populate Form Data on Initial Load --- 
+  // --- REVISED: Effect to Populate Form Data ONCE on Initial Load ---
   useEffect(() => {
-    console.log(`%c[FormPopulationEffect] Running`, 'color: green');
-    console.log("[FormPopulationEffect] Dependencies:", {
-        isLoadingCoreData,
-        hasPopulatedForm,
-        listingExists: !!listing,
-        allTranslationsExist: !!allTranslations,
-        allCategoryLinksExist: !!allCategoryLinks
+    console.log(`%c[FormPopulationEffect - Revised] Running`, 'color: #007bff'); // Blue color
+    console.log("[FormPopulationEffect - Revised] Dependencies:", {
+      listingExists: !!listing,
+      allTranslationsExist: !!allTranslations,
+      allCategoryLinksExist: !!allCategoryLinks,
+      initialPopulationDone, // Check the flag
+      listingId
     });
 
-    // --- Fetch Location Translations within this effect ---
-    const fetchLocationDataAndPopulate = async (locId: string) => {
-      console.log(`[FormPopulationEffect] Fetching location translations for location_id: ${locId}`);
-      let locationDataEn: any = null;
-      let locationDataAr: any = null;
-      try {
-        // Ensure supabase client is available
-        if (!supabase) throw new Error("Supabase client not available for fetching location.");
+    // Only attempt population if data is loaded AND it hasn't been done yet
+    if (listing && allTranslations && allCategoryLinks && !initialPopulationDone) {
+      console.log("[FormPopulationEffect - Revised] Core data loaded and initial population not done. Proceeding...");
 
-        const { data: locTransData, error: locTransError } = await supabase
-          .from('location_translations')
-          .select('language_code, name, address, city') // Fetch city and address
-          .eq('location_id', locId);
-        
-        if (locTransError) throw locTransError;
+      const populateForm = async () => {
+        try {
+          let locationDataEn: any = null;
+          let locationDataAr: any = null;
+          let cityEn = "";
+          let cityAr = "";
+          let locationAddressEn = ""; // Use a distinct variable for location address
+          let locationAddressAr = ""; // Use a distinct variable for location address
 
-        locationDataEn = locTransData?.find(t => t.language_code === 'en');
-        locationDataAr = locTransData?.find(t => t.language_code === 'ar');
-        console.log('[FormPopulationEffect] Fetched location data:', { locationDataEn, locationDataAr });
+          // Fetch location data ONLY if location_id exists
+          if (listing.location_id) {
+            console.log(`[FormPopulationEffect - Revised] Fetching location translations for location_id: ${listing.location_id}`);
+            if (!supabase) throw new Error("Supabase client needed for location fetch.");
 
-      } catch (err) {
-        console.error("Error fetching location translations within population effect:", err);
-        // Decide if you want to proceed without location data or show error
-      }
-      
-      // --- Now Populate the form using listing, listing translations, and fetched location data ---
-      if (listing && allTranslations && allCategoryLinks) {
+            const { data: locTransData, error: locTransError } = await supabase
+              .from('location_translations')
+              .select('language_code, name, address, city') // Fetch name, address, city
+              .eq('location_id', listing.location_id);
+
+            if (locTransError) throw locTransError;
+
+            locationDataEn = locTransData?.find(t => t.language_code === 'en');
+            locationDataAr = locTransData?.find(t => t.language_code === 'ar');
+            console.log('[FormPopulationEffect - Revised] Fetched location data:', { locationDataEn, locationDataAr });
+            // === IMPORTANT: Get CITY and ADDRESS from fetched location data ===
+            cityEn = locationDataEn?.city || "";
+            cityAr = locationDataAr?.city || "";
+            locationAddressEn = locationDataEn?.address || locationDataEn?.name || ""; // Use address or name from location
+            locationAddressAr = locationDataAr?.address || locationDataAr?.name || ""; // Use address or name from location
+          } else {
+              console.warn("[FormPopulationEffect - Revised] Listing has no location_id. Using listing.location as fallback.");
+              locationAddressEn = listing.location || ""; // Fallback to listing's own location field
+              locationAddressAr = ""; // No specific Arabic address if no location_id
+              // Assuming city is also not available if location_id is missing
+              cityEn = ""; 
+              cityAr = "";
+          }
+
+          // Find listing translations
           const en = allTranslations.find(t => t.listing_id === listingId && t.language_code === 'en');
           const ar = allTranslations.find(t => t.listing_id === listingId && t.language_code === 'ar');
           const links = allCategoryLinks.filter(link => link.listing_id === listingId);
-          // Ensure category IDs are strings to match the state type
-          const currentCategoryIds = links.map(link => String(link.category_id)); 
-          
-           if (en && ar && links) {
-                console.log('[FormPopulationEffect] Found en, ar, links. Preparing initialFormData...');
-                const joinArray = (arr: string[] | null | undefined): string => arr ? arr.join(', ') : '';
-      
-                const initialFormData = {
-                    // Core Listing Fields
-                    location: locationDataEn?.address || listing.location || "", // Use fetched EN address, fallback to listing.location
-                    location_ar: locationDataAr?.address || "", // Use fetched AR address
-                    google_maps_link: listing.google_maps_link || "",
-                    latitude: listing.latitude?.toString() || "",
-                    longitude: listing.longitude?.toString() || "",
-                    location_id: listing.location_id || null,
-                    google_place_id: (listing as any).google_place_id || null,
-                    tags: joinArray(listing.tags),
-                    listing_type: (listing as Listing).listing_type || "",
-                    city_en: locationDataEn?.city || "", // <<< Use fetched EN city
-                    city_ar: locationDataAr?.city || "", // <<< Use fetched AR city
-                    
-                    // English Listing Translation fields
-                    name_en: en.name || "",
-                    description_en: en.description || "",
-                    opening_hours_en: en.opening_hours || "",
-                    popular_stores_en: joinArray(en.popular_stores),
-                    entertainment_en: joinArray(en.entertainment),
-                    dining_options_en: joinArray(en.dining_options),
-                    special_services_en: joinArray(en.special_services),
-                    nearby_attractions_en: joinArray(en.nearby_attractions),
-                    parking_info_en: en.parking_info || "",
-                    cuisine_type_en: en.cuisine_type || "",
-                    story_behind_en: en.story_behind || "",
-                    menu_highlights_en: joinArray(en.menu_highlights),
-                    price_range_en: en.price_range || "",
-                    dietary_options_en: joinArray(en.dietary_options),
-                    reservation_info_en: en.reservation_info || "",
-                    seating_options_en: joinArray(en.seating_options),
-                    special_features_en: joinArray(en.special_features),
-                    historical_significance_en: en.historical_significance || "",
-                    entry_fee_en: en.entry_fee || "",
-                    best_time_to_visit_en: en.best_time_to_visit || "",
-                    tour_guide_availability_en: en.tour_guide_availability || "",
-                    tips_en: en.tips || "",
-                    activities_en: joinArray(en.activities),
-                    facilities_en: joinArray(en.facilities),
-                    safety_tips_en: en.safety_tips || "",
-                    duration_en: en.duration || "",
-                    highlights_en: joinArray(en.highlights),
-                    religious_significance_en: en.religious_significance || "",
-                    entry_rules_en: en.entry_rules || "",
-                    slug_en: en.slug || "",
+          const currentCategoryIds = links.map(link => String(link.category_id));
 
-                    // Arabic Listing Translation fields
-                    name_ar: ar.name || "",
-                    description_ar: ar.description || "",
-                    opening_hours_ar: ar.opening_hours || "",
-                    popular_stores_ar: joinArray(ar.popular_stores),
-                    entertainment_ar: joinArray(ar.entertainment),
-                    dining_options_ar: joinArray(ar.dining_options),
-                    special_services_ar: joinArray(ar.special_services),
-                    nearby_attractions_ar: joinArray(ar.nearby_attractions),
-                    parking_info_ar: ar.parking_info || "",
-                    cuisine_type_ar: ar.cuisine_type || "",
-                    story_behind_ar: ar.story_behind || "",
-                    menu_highlights_ar: joinArray(ar.menu_highlights),
-                    price_range_ar: ar.price_range || "",
-                    dietary_options_ar: joinArray(ar.dietary_options),
-                    reservation_info_ar: ar.reservation_info || "",
-                    seating_options_ar: joinArray(ar.seating_options),
-                    special_features_ar: joinArray(ar.special_features),
-                    historical_significance_ar: ar.historical_significance || "",
-                    entry_fee_ar: ar.entry_fee || "",
-                    best_time_to_visit_ar: ar.best_time_to_visit || "",
-                    tour_guide_availability_ar: ar.tour_guide_availability || "",
-                    tips_ar: ar.tips || "",
-                    activities_ar: joinArray(ar.activities),
-                    facilities_ar: joinArray(ar.facilities),
-                    safety_tips_ar: ar.safety_tips || "",
-                    duration_ar: ar.duration || "",
-                    highlights_ar: joinArray(ar.highlights),
-                    religious_significance_ar: ar.religious_significance || "",
-                    entry_rules_ar: ar.entry_rules || "",
-                    slug_ar: ar.slug || "",
-                    
-                    // Category IDs
-                    categoryIds: currentCategoryIds,
-                };
-                console.log(`%c[FormPopulationEffect] Calling setFormData with populated data (including location details)`, "color: orange");
-                setFormData(initialFormData); 
-                setHasPopulatedForm(true); // Set flag after successful population
-           } else {
-              console.warn('[FormPopulationEffect] Could not find required EN/AR translations or links. Form data not set.');
-           }
-      } else {
-           console.log('[FormPopulationEffect] Base listing/translations/links not ready yet.');
-      }
-    };
-    // --- End of inner function fetchLocationDataAndPopulate ---
+          if (en && ar) { // Ensure EN and AR listing translations exist
+            console.log('[FormPopulationEffect - Revised] Found en, ar listing translations. Preparing initialFormData...');
 
-    // Populate only if form hasn't been populated AND core listing data exists AND listing has a location_id
-    if (!isLoadingCoreData && !hasPopulatedForm && listing && listing.location_id) {
-       console.log('[FormPopulationEffect] Conditions met, calling fetchLocationDataAndPopulate...');
-       fetchLocationDataAndPopulate(listing.location_id);
+            // --- Parse Opening Hours (REVISED for Robustness) ---
+            let parsedOpeningHours: OpeningHoursData = { ...defaultOpeningHours }; // Start with a fresh copy of the MULTILINGUAL default
+            if (en.opening_hours && typeof en.opening_hours === 'string') {
+              try {
+                const parsedDbData = JSON.parse(en.opening_hours);
+
+                // Validate and merge day by day
+                if (parsedDbData && typeof parsedDbData === 'object') {
+                  let structureSeemsValid = true;
+                  const mergedHours: OpeningHoursData = {} as OpeningHoursData; // Initialize empty and assert type
+
+                  Object.keys(defaultOpeningHours).forEach(dayKey => {
+                    const day = dayKey as keyof OpeningHoursData;
+                    const dbDayData = parsedDbData[day];
+                    const defaultDayData = defaultOpeningHours[day]; // Get default for this day
+
+                    if (dbDayData && typeof dbDayData === 'object') {
+                      // Data for this day exists in DB JSON
+                      mergedHours[day] = {
+                        isOpen: typeof dbDayData.isOpen === 'boolean' ? dbDayData.isOpen : defaultDayData.isOpen,
+                        is24Hours: typeof dbDayData.is24Hours === 'boolean' ? dbDayData.is24Hours : defaultDayData.is24Hours,
+                        open: typeof dbDayData.open === 'string' ? dbDayData.open : defaultDayData.open,
+                        close: typeof dbDayData.close === 'string' ? dbDayData.close : defaultDayData.close,
+                        // Prioritize new fields, fallback to old 'notes' ONLY if new are missing, else default to empty
+                        notes_en: typeof dbDayData.notes_en === 'string' ? dbDayData.notes_en 
+                                  : (typeof dbDayData.notes === 'string' ? dbDayData.notes : defaultDayData.notes_en), // Fallback to 'notes' then default
+                        notes_ar: typeof dbDayData.notes_ar === 'string' ? dbDayData.notes_ar : defaultDayData.notes_ar, // Default if missing
+                      };
+                      // If isOpen is false, ensure is24Hours is also false
+                      if (!mergedHours[day].isOpen) {
+                        mergedHours[day].is24Hours = false;
+                      }
+                    } else {
+                      // Day missing from DB JSON, use default
+                      console.warn(`[FormPopulationEffect] Day ${day} missing from parsed DB opening hours. Using default.`);
+                      mergedHours[day] = defaultDayData;
+                      structureSeemsValid = false; // Mark as potentially incomplete
+                    }
+                  });
+
+                  parsedOpeningHours = mergedHours; // Assign the carefully merged data
+                  if (structureSeemsValid) {
+                     console.log("[FormPopulationEffect] Successfully parsed and validated opening hours from DB string.");
+                  } else {
+                     console.warn("[FormPopulationEffect] Parsed opening hours from DB string might have been incomplete. Defaults applied where necessary.");
+                  }
+
+                } else {
+                   console.warn("[FormPopulationEffect] Parsed opening hours JSON was not a valid object. Using default.");
+                   parsedOpeningHours = { ...defaultOpeningHours }; // Ensure fallback is a fresh copy
+                }
+              } catch (parseError) {
+                 console.error("[FormPopulationEffect] Error parsing opening_hours JSON from DB:", parseError, "Using default.");
+                 parsedOpeningHours = { ...defaultOpeningHours }; // Ensure fallback is a fresh copy
+              }
+            } else {
+               console.log("[FormPopulationEffect] No opening hours string found in EN translation. Using default.");
+               parsedOpeningHours = { ...defaultOpeningHours }; // Ensure fallback is a fresh copy
+            }
+            // -----------------------------------------------------
+
+            const populatedFormData: FormDataState = {
+              // Core Listing Fields
+              location: locationAddressEn, 
+              location_ar: locationAddressAr, 
+              google_maps_link: listing.google_maps_link || "",
+              latitude: listing.latitude?.toString() || "",
+              longitude: listing.longitude?.toString() || "",
+              location_id: listing.location_id || null,
+              google_place_id: (listing as any).google_place_id || null,
+              tags: listing.tags || [],
+              listing_type: listing.listing_type || "",
+              city_en: cityEn,
+              city_ar: cityAr,
+              opening_hours: parsedOpeningHours, 
+              // English Listing Translation fields
+              name_en: en.name || "",
+              description_en: en.description || "",
+              popular_stores_en: en.popular_stores || [],
+              entertainment_en: en.entertainment || [],
+              dining_options_en: en.dining_options || [],
+              special_services_en: en.special_services || [],
+             
+              parking_info_en: en.parking_info || "",
+              cuisine_type_en: en.cuisine_type || "",
+              story_behind_en: en.story_behind || "",
+              menu_highlights_en: en.menu_highlights || [],
+              price_range_en: en.price_range || "",
+              dietary_options_en: en.dietary_options || [],
+              special_features_en: en.special_features || [],
+              historical_significance_en: en.historical_significance || "",
+              entry_fee_en: en.entry_fee || "",
+              best_time_to_visit_en: en.best_time_to_visit || "",
+              tour_guide_availability_en: en.tour_guide_availability || "",
+              tips_en: en.tips || "",
+              activities_en: en.activities || [],
+              facilities_en: en.facilities || [],
+              safety_tips_en: typeof en.safety_tips === 'string' ? en.safety_tips.split(',').map(s => s.trim()).filter(Boolean) : (en.safety_tips || []), // Ensure array
+              duration_en: en.duration || "",
+              highlights_en: en.highlights || [],
+              religious_significance_en: en.religious_significance || "",
+              entry_rules_en: en.entry_rules || "",
+              slug_en: en.slug || "",
+              // Arabic Listing Translation fields
+              name_ar: ar.name || "",
+              description_ar: ar.description || "",
+              popular_stores_ar: ar.popular_stores || [],
+              entertainment_ar: ar.entertainment || [],
+              dining_options_ar: ar.dining_options || [],
+              special_services_ar: ar.special_services || [],
+             
+              parking_info_ar: ar.parking_info || "",
+              cuisine_type_ar: ar.cuisine_type || "",
+              story_behind_ar: ar.story_behind || "",
+              menu_highlights_ar: ar.menu_highlights || [],
+              price_range_ar: ar.price_range || "",
+              dietary_options_ar: ar.dietary_options || [],
+              special_features_ar: ar.special_features || [],
+              historical_significance_ar: ar.historical_significance || "",
+              entry_fee_ar: ar.entry_fee || "",
+              best_time_to_visit_ar: ar.best_time_to_visit || "",
+              tour_guide_availability_ar: ar.tour_guide_availability || "",
+              tips_ar: ar.tips || "",
+              activities_ar: ar.activities || [],
+              facilities_ar: ar.facilities || [],
+              safety_tips_ar: typeof ar.safety_tips === 'string' ? ar.safety_tips.split(',').map(s => s.trim()).filter(Boolean) : (ar.safety_tips || []), // Ensure array
+              duration_ar: ar.duration || "",
+              highlights_ar: ar.highlights || [],
+              religious_significance_ar: ar.religious_significance || "",
+              entry_rules_ar: ar.entry_rules || "",
+              slug_ar: ar.slug || "",
+              // Category IDs
+              categoryIds: currentCategoryIds,
+              seating_options_en: en?.seating_options || [],
+              seating_options_ar: ar?.seating_options || [],
+            };
+
+            console.log(`%c[FormPopulationEffect - Revised] Calling setFormData with fully populated data.`, "color: #28a745");
+            setFormData(populatedFormData); 
+            setInitialPopulationDone(true); 
+          } else {
+            console.warn('[FormPopulationEffect - Revised] Could not find required EN/AR listing translations. Population skipped.');
+            // Optionally set flag true even if skipped, to prevent retries if data is fundamentally missing
+            // setInitialPopulationDone(true); 
+          }
+        } catch (error: any) {
+          console.error("[FormPopulationEffect - Revised] Error during population:", error);
+          setErrorMessage(`Error populating form: ${error.message}`);
+          // Optionally set flag true on error to prevent infinite retries
+          // setInitialPopulationDone(true);
+        }
+      };
+
+      populateForm(); // Execute the population logic
+
     } else {
-       console.log('[FormPopulationEffect] Conditions not met for population (core data loading, already populated, no listing, or no location_id)');
-       // If core data is loaded, listing exists, but there's no location_id, still mark as populated to avoid loops
-       if(!isLoadingCoreData && !hasPopulatedForm && listing && !listing.location_id){ 
-           console.warn('[FormPopulationEffect] Listing loaded but has no location_id. Marking as populated.');
-           // We still need to populate the form with whatever data we *do* have
-           const en = allTranslations?.find(t => t.listing_id === listingId && t.language_code === 'en');
-           const ar = allTranslations?.find(t => t.listing_id === listingId && t.language_code === 'ar');
-           const links = allCategoryLinks?.filter(link => link.listing_id === listingId);
-           const currentCategoryIds = links?.map(link => String(link.category_id)) || [];
-           if (en && ar && links) {
-                console.log('[FormPopulationEffect] Populating form WITHOUT location details...');
-                const joinArray = (arr: string[] | null | undefined): string => arr ? arr.join(', ') : '';
-                const initialFormData = { /* ... (construct object like above but without city/address or using fallbacks) ... */ 
-                    location: listing.location || "",
-                    location_ar: "", 
-                    google_maps_link: listing.google_maps_link || "",
-                    latitude: listing.latitude?.toString() || "",
-                    longitude: listing.longitude?.toString() || "",
-                    location_id: null, // No location_id
-                    google_place_id: null, // No google_place_id
-                    tags: joinArray(listing.tags),
-                    listing_type: (listing as Listing).listing_type || "",
-                    city_en: "", // No city data
-                    city_ar: "", // No city data
-                    // --- Fill remaining fields from en/ar translations and links ---
-                    name_en: en.name || "",
-                    description_en: en.description || "",
-                    opening_hours_en: en.opening_hours || "",
-                    popular_stores_en: joinArray(en.popular_stores),
-                    entertainment_en: joinArray(en.entertainment),
-                    dining_options_en: joinArray(en.dining_options),
-                    special_services_en: joinArray(en.special_services),
-                    nearby_attractions_en: joinArray(en.nearby_attractions),
-                    parking_info_en: en.parking_info || "",
-                    cuisine_type_en: en.cuisine_type || "",
-                    story_behind_en: en.story_behind || "",
-                    menu_highlights_en: joinArray(en.menu_highlights),
-                    price_range_en: en.price_range || "",
-                    dietary_options_en: joinArray(en.dietary_options),
-                    reservation_info_en: en.reservation_info || "",
-                    seating_options_en: joinArray(en.seating_options),
-                    special_features_en: joinArray(en.special_features),
-                    historical_significance_en: en.historical_significance || "",
-                    entry_fee_en: en.entry_fee || "",
-                    best_time_to_visit_en: en.best_time_to_visit || "",
-                    tour_guide_availability_en: en.tour_guide_availability || "",
-                    tips_en: en.tips || "",
-                    activities_en: joinArray(en.activities),
-                    facilities_en: joinArray(en.facilities),
-                    safety_tips_en: en.safety_tips || "",
-                    duration_en: en.duration || "",
-                    highlights_en: joinArray(en.highlights),
-                    religious_significance_en: en.religious_significance || "",
-                    entry_rules_en: en.entry_rules || "",
-                    slug_en: en.slug || "",
-                    name_ar: ar.name || "",
-                    description_ar: ar.description || "",
-                    opening_hours_ar: ar.opening_hours || "",
-                    popular_stores_ar: joinArray(ar.popular_stores),
-                    entertainment_ar: joinArray(ar.entertainment),
-                    dining_options_ar: joinArray(ar.dining_options),
-                    special_services_ar: joinArray(ar.special_services),
-                    nearby_attractions_ar: joinArray(ar.nearby_attractions),
-                    parking_info_ar: ar.parking_info || "",
-                    cuisine_type_ar: ar.cuisine_type || "",
-                    story_behind_ar: ar.story_behind || "",
-                    menu_highlights_ar: joinArray(ar.menu_highlights),
-                    price_range_ar: ar.price_range || "",
-                    dietary_options_ar: joinArray(ar.dietary_options),
-                    reservation_info_ar: ar.reservation_info || "",
-                    seating_options_ar: joinArray(ar.seating_options),
-                    special_features_ar: joinArray(ar.special_features),
-                    historical_significance_ar: ar.historical_significance || "",
-                    entry_fee_ar: ar.entry_fee || "",
-                    best_time_to_visit_ar: ar.best_time_to_visit || "",
-                    tour_guide_availability_ar: ar.tour_guide_availability || "",
-                    tips_ar: ar.tips || "",
-                    activities_ar: joinArray(ar.activities),
-                    facilities_ar: joinArray(ar.facilities),
-                    safety_tips_ar: ar.safety_tips || "",
-                    duration_ar: ar.duration || "",
-                    highlights_ar: joinArray(ar.highlights),
-                    religious_significance_ar: ar.religious_significance || "",
-                    entry_rules_ar: ar.entry_rules || "",
-                    slug_ar: ar.slug || "",
-                    categoryIds: currentCategoryIds,
-                };
-                setFormData(initialFormData);
-                setHasPopulatedForm(true); // Still mark as populated
-           } else {
-               console.warn('[FormPopulationEffect] Could not find EN/AR translations or links even when listing exists without location_id.');
-           }
-       }
+      // Log why it didn't run
+      if (initialPopulationDone) {
+        console.log("[FormPopulationEffect - Revised] Skipping population: Already done.");
+      } else if (!listing || !allTranslations || !allCategoryLinks) {
+        console.log("[FormPopulationEffect - Revised] Skipping population: Core data not yet loaded.");
+      }
     }
-  // Depend on core data loading state, populated flag, and the data itself
-  }, [isLoadingCoreData, hasPopulatedForm, listing, allTranslations, allCategoryLinks, listingId, supabase]); 
-  // --------------------------------------------------------------------------
 
-  // --- Fetch Available Collections & Existing Associations ---
+  // Depend ONLY on the data needed and the flag. Avoid formData itself.
+  }, [listing, allTranslations, allCategoryLinks, listingId, supabase, initialPopulationDone]); 
+  // --- End of Revised Effect ---
+
+  // --- Fetch Available Collections & Existing Associations (No Change) ---
   useEffect(() => {
-    const fetchCollections = async () => {
+     // ... same collections fetch logic ...
+     const fetchCollections = async () => {
       if (!supabase) return;
       console.log("%c[EditListingForm] Fetching available collections & existing associations...", "color: purple");
       setCollectionsLoading(true);
@@ -707,7 +773,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
     };
 
     fetchCollections();
-  }, [supabase, listingId]); // Depend on supabase client and listingId
+  }, [supabase, listingId]);
 
   // --- NEW: Handle Form Input Change ---
   const handleChange = useCallback((e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -715,6 +781,21 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
     console.log(`[EditListingForm] handleChange: name=${name}, value=${value.substring(0, 50)}...`);
     setFormData(prev => ({ ...prev, [name]: value }));
   }, []);
+
+  // >>> NEW HANDLER FOR TAG INPUTS
+  const handleGenericTagInputChange = useCallback((fieldName: keyof FormDataState, newValueString: string) => { // <<< Changed second param to string
+    console.log(`[EditListingForm] handleGenericTagInputChange: field=${fieldName}, valueString=`, newValueString);
+    // Split by comma, trim whitespace from each tag, and remove any empty strings resulting from multiple commas
+    const newTags = newValueString.split(',').map(tag => tag.trim()).filter(tag => tag !== '');
+    // ---> ADD LOG HERE <---
+    console.log('[handleGenericTagInputChange]', { fieldName, newValueString, newTags });
+    // ---------------------
+    setFormData(prev => ({
+      ...prev,
+      [fieldName]: newTags, // Update state with the array of strings
+    }));
+  }, []);
+  // <<< END NEW HANDLER
 
   // --- NEW: Handle Category Checkbox Change ---
   const handleCategoryChange = useCallback((categoryId: string, checked: boolean) => {
@@ -733,7 +814,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
 
    // --- NEW: Handle Collection Checkbox Change ---
    const handleCollectionChange = useCallback((collectionId: string, selected: boolean) => {
-    console.log(`[EditListingForm] handleCollectionChange: collectionId=${collectionId}, selected=${selected}`);
+     console.log(`[EditListingForm] handleCollectionChange: collectionId=${collectionId}, selected=${selected}`);
     setCollectionSelections(prev => ({
       ...prev,
       [collectionId]: {
@@ -813,112 +894,116 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
       }
   };
   // -----------------------------------------
-
+  
+  // --- ADDED: Handler for OpeningHoursInput ---
+  const handleOpeningHoursChange = (newOpeningHours: OpeningHoursData) => {
+    console.log("[EditListingForm] handleOpeningHoursChange:", newOpeningHours);
+    setFormData(prev => ({ ...prev, opening_hours: newOpeningHours }));
+  };
+  // -------------------------------------------
+  
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     console.log("%c[EditListingForm] handleSubmit triggered!", "color: green; font-weight: bold;"); // <-- Add log here
     setSaving(true);
     setErrorMessage(null);
-
-    // --- Prepare data ---
-    const parseArray = (str: string) => str ? str.split(',').map(t => t.trim()).filter(t => t) : [];
     
-    // 1. Direct Listing Table Fields
+    // --- Prepare data ---
+    // 1. Direct Listing Table Fields (No change needed here)
     const listingPayload = {
       listing_type: formData.listing_type,
       google_maps_link: formData.google_maps_link || null,
-      tags: parseArray(formData.tags),
+      tags: formData.tags, 
       latitude: parseFloat(formData.latitude) || null,
       longitude: parseFloat(formData.longitude) || null,
       google_place_id: formData.google_place_id || null, 
-      // Note: Location name/address fields are separate for location_translations update
-      // location: formData.location, // We probably don't need this if using location_translations
     };
 
-    // 2. Location Translation Fields (for the separate location entry)
-    // UPDATED to match backend API expectations
+    // 2. Location Translation Fields (No change needed here)
     const locationTranslationPayload = {
-        address_en: formData.location,       // Use address_en key for English Address
-        address_ar: formData.location_ar,    // Use address_ar key for Arabic Address
-        city_en: formData.city_en,          // Add English City
-        city_ar: formData.city_ar,          // Add Arabic City
-        location_id: formData.location_id // Pass existing location_id if available
+       address_en: formData.location,       
+       address_ar: formData.location_ar,    
+       city_en: formData.city_en,          
+       city_ar: formData.city_ar,          
+       location_id: formData.location_id 
     };
 
-    // 3. Listing Translation Fields (for this specific listing's translatable content)
+    // --- Stringify Opening Hours ---
+    const openingHoursString = JSON.stringify(formData.opening_hours);
+    // ----------------------------
+
+    // 3. Listing Translation Fields (INCLUDE ALL FIELDS)
     const listingTranslationsPayload = [
-      {
+      { // English
         language_code: 'en',
-        name: formData.name_en, // Listing Name EN
-        description: formData.description_en, // Listing Desc EN
-        opening_hours: formData.opening_hours_en,
-        popular_stores: parseArray(formData.popular_stores_en),
-        entertainment: parseArray(formData.entertainment_en),
-        dining_options: parseArray(formData.dining_options_en),
-        special_services: parseArray(formData.special_services_en),
-        nearby_attractions: parseArray(formData.nearby_attractions_en),
+        name: formData.name_en,
+        description: formData.description_en,
+        opening_hours: openingHoursString,
+        popular_stores: formData.popular_stores_en, 
+        entertainment: formData.entertainment_en,
+        dining_options: formData.dining_options_en,
+        special_services: formData.special_services_en,
+       
         parking_info: formData.parking_info_en,
         cuisine_type: formData.cuisine_type_en,
         story_behind: formData.story_behind_en,
-        menu_highlights: parseArray(formData.menu_highlights_en),
+        menu_highlights: formData.menu_highlights_en,
         price_range: formData.price_range_en,
-        dietary_options: parseArray(formData.dietary_options_en),
-        reservation_info: formData.reservation_info_en,
-        seating_options: parseArray(formData.seating_options_en),
-        special_features: parseArray(formData.special_features_en),
+        dietary_options: formData.dietary_options_en,
+      
+        special_features: formData.special_features_en,
         historical_significance: formData.historical_significance_en,
         entry_fee: formData.entry_fee_en,
         best_time_to_visit: formData.best_time_to_visit_en,
         tour_guide_availability: formData.tour_guide_availability_en,
         tips: formData.tips_en,
-        activities: parseArray(formData.activities_en),
-        facilities: parseArray(formData.facilities_en),
-        safety_tips: formData.safety_tips_en,
+        activities: formData.activities_en,
+        facilities: formData.facilities_en,
+        safety_tips: formData.safety_tips_en, // Assuming backend expects array now
         duration: formData.duration_en,
-        highlights: parseArray(formData.highlights_en),
+        highlights: formData.highlights_en,
         religious_significance: formData.religious_significance_en,
         entry_rules: formData.entry_rules_en,
         slug: formData.slug_en,
       },
-      {
+      { // Arabic
         language_code: 'ar',
-        name: formData.name_ar, // Listing Name AR
-        description: formData.description_ar, // Listing Desc AR
-        opening_hours: formData.opening_hours_ar,
-        popular_stores: parseArray(formData.popular_stores_ar),
-        entertainment: parseArray(formData.entertainment_ar),
-        dining_options: parseArray(formData.dining_options_ar),
-        special_services: parseArray(formData.special_services_ar),
-        nearby_attractions: parseArray(formData.nearby_attractions_ar),
+        name: formData.name_ar, 
+        description: formData.description_ar, 
+        opening_hours: openingHoursString, // Use SAME string
+        popular_stores: formData.popular_stores_ar, 
+        entertainment: formData.entertainment_ar,
+        dining_options: formData.dining_options_ar,
+        special_services: formData.special_services_ar,
+       
         parking_info: formData.parking_info_ar,
         cuisine_type: formData.cuisine_type_ar,
         story_behind: formData.story_behind_ar,
-        menu_highlights: parseArray(formData.menu_highlights_ar),
+        menu_highlights: formData.menu_highlights_ar,
         price_range: formData.price_range_ar,
-        dietary_options: parseArray(formData.dietary_options_ar),
-        reservation_info: formData.reservation_info_ar,
-        seating_options: parseArray(formData.seating_options_ar),
-        special_features: parseArray(formData.special_features_ar),
+        dietary_options: formData.dietary_options_ar,
+      
+        special_features: formData.special_features_ar,
         historical_significance: formData.historical_significance_ar,
         entry_fee: formData.entry_fee_ar,
         best_time_to_visit: formData.best_time_to_visit_ar,
         tour_guide_availability: formData.tour_guide_availability_ar,
         tips: formData.tips_ar,
-        activities: parseArray(formData.activities_ar),
-        facilities: parseArray(formData.facilities_ar),
-        safety_tips: formData.safety_tips_ar,
+        activities: formData.activities_ar,
+        facilities: formData.facilities_ar,
+        safety_tips: formData.safety_tips_ar, // Assuming backend expects array now
         duration: formData.duration_ar,
-        highlights: parseArray(formData.highlights_ar),
+        highlights: formData.highlights_ar,
         religious_significance: formData.religious_significance_ar,
         entry_rules: formData.entry_rules_ar,
         slug: formData.slug_ar,
       },
     ];
 
-    // 4. Category Links
+    // 4. Category Links (No change needed here)
     const categoryIdsPayload = formData.categoryIds;
 
-    // 5. Collection Links
+    // 5. Collection Links (No change needed here)
     const collectionLinksPayload = Object.entries(collectionSelections)
         .filter(([_, state]) => state.selected) // Only include selected collections
         .map(([collectionId, state]) => ({
@@ -978,7 +1063,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
 
   // --- Mount/Unmount Effect ---
   useEffect(() => {
-    console.log(`%c[EditListingForm] MOUNTED - ID: ${listingId}`, 'color: green; font-weight: bold;');
+     console.log(`%c[EditListingForm] MOUNTED - ID: ${listingId}`, 'color: green; font-weight: bold;');
     
     // Cleanup function
     return () => {
@@ -1020,7 +1105,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
   }
 
   // Only show full-page loader during *initial* data load (use NEW flag)
-  if (isLoadingCoreData) { 
+  if (isInitialDataLoading) { 
     return (
       <div className="flex justify-center items-center py-12">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -1030,7 +1115,11 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
   }
 
   console.log(`%c[EditListingForm] Rendering with formData.listing_type: ${formData.listing_type}`, "color: purple"); // <-- Log current value on render
-  console.log(`%c[EditListingForm] Button State Check: saving=${saving}, isLoadingCoreData=${isLoadingCoreData}`, "color: orange"); // <-- ADDED LOG
+  console.log(`%c[EditListingForm] Button State Check: saving=${saving}, isInitialDataLoading=${isInitialDataLoading}`, "color: orange"); // <-- ADDED LOG
+
+  // ---> ADD LOG HERE <---
+  console.log('%c[Render Check] formData.safety_tips_en:', 'color: red;', typeof formData.safety_tips_en, formData.safety_tips_en);
+  // ---------------------
 
   return (
     <>
@@ -1060,12 +1149,15 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                     <Label htmlFor="listing_type">Listing Type *</Label>
                     <Select 
                         name="listing_type" 
+                        // REMOVED the name prop from Select as it's handled by onValueChange/value
                         onValueChange={(value) => {
-                            console.log(`[EditListingForm] Listing Type onValueChange triggered with:`, value);
-                            // Removed the `if (value !== "")` check to always update state
+                            console.log(`%c[EditListingForm] Listing Type onValueChange triggered with: ${value}`, 'color: magenta;'); // Log value
+                            console.log("%cBEFORE setFormData (listing_type)", "color: orange;"); // Log before setting state
                             setFormData((prev) => ({ ...prev, listing_type: value }));
+                            console.log("%cAFTER setFormData (listing_type)", "color: orange;"); // Log after setting state
                         }} 
-                        value={formData.listing_type}
+                        value={formData.listing_type} // Controlled component
+                        required // Add required here if needed
                     >
                         <SelectTrigger id="listing_type">
                             <SelectValue placeholder="Select Listing Type" />
@@ -1083,29 +1175,29 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                  {/* Location Name (English Address) */}
                 <div className="space-y-2">
                     <Label htmlFor="location">Location Name / Address (English)</Label>
-                    <Textarea id="location" name="location" value={formData.location} onChange={handleChange} placeholder="e.g., Main Street, Downtown" />
+                    {/* Bind Textarea value and onChange */}
+                    <Textarea id="location" name="location" value={formData.location} onChange={handleChange} placeholder="e.g., Main Street, Downtown" /> 
                 </div>
 
                  {/* --- START: City Dropdowns --- */}
                  {/* City (English) */}
                  <div className="space-y-2">
                     <Label htmlFor="city_en">City (English) *</Label>
+                     {/* Bind Select value and onValueChange */}
                     <Select
-                        name="city_en"
+                        name="city_en" 
                         required
                         value={formData.city_en}
-                        // === START Linked Logic ===
                         onValueChange={(value) => {
                             const matchingProvince = IRAQ_PROVINCES.find(p => p.en === value);
                             setFormData((prev) => ({ 
                                 ...prev, 
                                 city_en: value, 
-                                city_ar: matchingProvince ? matchingProvince.ar : '' // Update Arabic city too
+                                city_ar: matchingProvince ? matchingProvince.ar : '' 
                             }));
                         }}
-                        // === END Linked Logic ===
                     >
-                        <SelectTrigger id="city_en">
+                       <SelectTrigger id="city_en">
                             <SelectValue placeholder="Select City (English)" />
                         </SelectTrigger>
                         <SelectContent>
@@ -1121,20 +1213,19 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                  {/* City (Arabic) */}
                  <div className="space-y-2">
                      <Label htmlFor="city_ar">City (Arabic) *</Label>
+                      {/* Bind Select value and onValueChange */}
                      <Select
                          name="city_ar"
                          required
                          value={formData.city_ar}
-                         // === START Linked Logic ===
                          onValueChange={(value) => {
                              const matchingProvince = IRAQ_PROVINCES.find(p => p.ar === value);
                              setFormData((prev) => ({ 
                                  ...prev, 
                                  city_ar: value, 
-                                 city_en: matchingProvince ? matchingProvince.en : '' // Update English city too
+                                 city_en: matchingProvince ? matchingProvince.en : '' 
                              }));
                          }}
-                         // === END Linked Logic ===
                          dir="rtl"
                      >
                          <SelectTrigger id="city_ar">
@@ -1155,6 +1246,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                  <div className="space-y-2">
                     <Label htmlFor="google_maps_link">Google Maps Link</Label>
                     <div className="flex items-center gap-2">
+                        {/* Bind Input value and onChange */}
                         <Input 
                             id="google_maps_link" 
                             name="google_maps_link" 
@@ -1182,20 +1274,26 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                 {/* Location Name (Arabic Address) */}
                 <div className="space-y-2">
                     <Label htmlFor="location_ar">Location Name / Address (Arabic)</Label>
+                     {/* Bind Textarea value and onChange */}
                     <Textarea 
                         id="location_ar" 
                         name="location_ar" 
                         value={formData.location_ar} 
                         onChange={handleChange} 
                         placeholder="مثال: الشارع الرئيسي، وسط البلد" 
-                        dir="rtl" // Set text direction to right-to-left
+                        dir="rtl" 
                     />
                 </div>
 
                 {/* Tags */}
                 <div className="space-y-2">
-                    <Label htmlFor="tags">Tags</Label>
-                    <Input id="tags" name="tags" value={formData.tags} onChange={handleChange} placeholder="e.g., family-friendly, outdoor, shopping" />
+                    <Label htmlFor="tags">Tags <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
+                    {/* Bind TagInput value and onTagsChange */}
+                    <TagInput 
+                        id="tags"
+                        value={(formData.tags || []).join(',')} 
+                        onTagsChange={(newValueString: string) => handleGenericTagInputChange('tags', newValueString)}
+                    />
                 </div>
 
                 {/* Latitude & Longitude */}
@@ -1203,12 +1301,14 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                     {/* Latitude */}
                     <div className="space-y-2">
                         <Label htmlFor="latitude">Latitude</Label>
+                         {/* Bind Input value and onChange */}
                         <Input id="latitude" name="latitude" type="number" step="any" value={formData.latitude} onChange={handleChange} placeholder="e.g., 24.7136" />
                     </div>
 
                     {/* Longitude */}
                     <div className="space-y-2">
                         <Label htmlFor="longitude">Longitude</Label>
+                        {/* Bind Input value and onChange */}
                         <Input id="longitude" name="longitude" type="number" step="any" value={formData.longitude} onChange={handleChange} placeholder="e.g., 46.6753" />
                     </div>
                 </div>
@@ -1219,8 +1319,8 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                   <Label>Map Preview</Label>
                   <div className="mt-2">
                       <MapDisplay 
-                          latitude={parsedLatitude}   // <-- Use memoized value
-                          longitude={parsedLongitude} // <-- Use memoized value
+                          latitude={parsedLatitude}   
+                          longitude={parsedLongitude} 
                       />
                   </div>
                 </div>
@@ -1230,15 +1330,17 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
           </Card>
 
          {/* Images Card */}
-          <Card>
+         <Card>
             <CardHeader><CardTitle>Listing Images</CardTitle></CardHeader>
             <CardContent>
                <p className="text-sm text-muted-foreground mb-4">
                  Manage existing images or upload new ones for this listing.
                </p>
-              <ListingImageManager listingId={listingId} />
+              <ListingImageManager 
+                listingId={listingId} 
+              />
             </CardContent>
-          </Card>
+         </Card>
           
         {/* --- Side-by-Side Language Container --- */}
          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -1259,21 +1361,27 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                        <Label htmlFor="description_en">Description (English)</Label>
                        <Textarea id="description_en" name="description_en" value={formData.description_en} onChange={handleChange} />
                    </div>
-                    <div className="space-y-2">
-                       <Label htmlFor="opening_hours_en">Opening Hours (English)</Label>
-                       <Input id="opening_hours_en" name="opening_hours_en" value={formData.opening_hours_en} onChange={handleChange} />
-                   </div>
-
                     {/* === Shop/Mall Specific Fields === */}
                     {formData.listing_type === 'Shop/Mall' && (
                         <>
-                           <div className="space-y-2"><Label htmlFor="popular_stores_en">Popular Stores (English)</Label><Input id="popular_stores_en" name="popular_stores_en" value={formData.popular_stores_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="entertainment_en">Entertainment (English)</Label><Input id="entertainment_en" name="entertainment_en" value={formData.entertainment_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="dining_options_en">Dining Options (English)</Label><Input id="dining_options_en" name="dining_options_en" value={formData.dining_options_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="special_services_en">Special Services (English)</Label><Input id="special_services_en" name="special_services_en" value={formData.special_services_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
-                       </>
+                           <div className="space-y-2">
+                                <Label htmlFor="popular_stores_en">Popular Stores (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
+                                <TagInput id="popular_stores_en" value={(formData.popular_stores_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('popular_stores_en', newValueString)} />
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="entertainment_en">Entertainment (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
+                                <TagInput id="entertainment_en" value={(formData.entertainment_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('entertainment_en', newValueString)} />
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="dining_options_en">Dining Options (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
+                                <TagInput id="dining_options_en" value={(formData.dining_options_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('dining_options_en', newValueString)} />
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="special_services_en">Special Services (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
+                                <TagInput id="special_services_en" value={(formData.special_services_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('special_services_en', newValueString)} />
+                            </div>
+                            <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
+                        </>
                     )}
 
                     {/* === Restaurant/Café Specific Fields === */}
@@ -1281,14 +1389,20 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                        <>
                            <div className="space-y-2"><Label htmlFor="cuisine_type_en">Cuisine Type (English)</Label><Input id="cuisine_type_en" name="cuisine_type_en" value={formData.cuisine_type_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="story_behind_en">Story Behind (English)</Label><Textarea id="story_behind_en" name="story_behind_en" value={formData.story_behind_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="menu_highlights_en">Menu Highlights (English)</Label><Input id="menu_highlights_en" name="menu_highlights_en" value={formData.menu_highlights_en} onChange={handleChange} /></div>
+                           <div className="space-y-2">
+                                <Label htmlFor="menu_highlights_en">Menu Highlights (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
+                                <TagInput id="menu_highlights_en" value={(formData.menu_highlights_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('menu_highlights_en', newValueString)} />
+                            </div>
                            <div className="space-y-2"><Label htmlFor="price_range_en">Price Range (English)</Label><Input id="price_range_en" name="price_range_en" value={formData.price_range_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="dietary_options_en">Dietary Options (English)</Label><Input id="dietary_options_en" name="dietary_options_en" value={formData.dietary_options_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="reservation_info_en">Reservation Info (English)</Label><Input id="reservation_info_en" name="reservation_info_en" value={formData.reservation_info_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="seating_options_en">Seating Options (English)</Label><Input id="seating_options_en" name="seating_options_en" value={formData.seating_options_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="special_features_en">Special Features (English)</Label><Input id="special_features_en" name="special_features_en" value={formData.special_features_en} onChange={handleChange} /></div>
+                           <div className="space-y-2">
+                                <Label htmlFor="dietary_options_en">Dietary Options (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
+                                <TagInput id="dietary_options_en" value={(formData.dietary_options_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('dietary_options_en', newValueString)} />
+                            </div>
+                           <div className="space-y-2">
+                                <Label htmlFor="special_features_en">Special Features (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
+                                <TagInput id="special_features_en" value={(formData.special_features_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('special_features_en', newValueString)} />
+                            </div>
                            <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
                        </>
                    )}
 
@@ -1300,36 +1414,56 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                            <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="tour_guide_availability_en">Tour Guide Availability (English)</Label><Input id="tour_guide_availability_en" name="tour_guide_availability_en" value={formData.tour_guide_availability_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                           <div className="space-y-2">
+                                <Label htmlFor="facilities_en">Facilities (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
+                                <TagInput id="facilities_en" value={(formData.facilities_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('facilities_en', newValueString)} />
+                            </div>
                            <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
                        </>
                    )}
 
                    {/* === Park/Nature Specific Fields === */}
-                   {formData.listing_type === 'Park/Nature' && (
-                       <>
-                           <div className="space-y-2"><Label htmlFor="activities_en">Activities (English)</Label><Input id="activities_en" name="activities_en" value={formData.activities_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="safety_tips_en">Safety Tips (English)</Label><Textarea id="safety_tips_en" name="safety_tips_en" value={formData.safety_tips_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="entry_fee_en">Entry Fee (English)</Label><Input id="entry_fee_en" name="entry_fee_en" value={formData.entry_fee_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
-                       </>
+                    {formData.listing_type === 'Park/Nature' && (
+                        <>
+                           <div className="space-y-2">
+                                <Label htmlFor="activities_en">Activities (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
+                                <TagInput id="activities_en" value={(formData.activities_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('activities_en', newValueString)} />
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="facilities_en">Facilities (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
+                                <TagInput id="facilities_en" value={(formData.facilities_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('facilities_en', newValueString)} />
+                            </div>
+                            <div className="space-y-2"><Label htmlFor="safety_tips_en">Safety Tips (English)</Label><Textarea id="safety_tips_en" name="safety_tips_en" value={formData.safety_tips_en} onChange={handleChange} /></div>
+                            <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
+                            <div className="space-y-2"><Label htmlFor="entry_fee_en">Entry Fee (English)</Label><Input id="entry_fee_en" name="entry_fee_en" value={formData.entry_fee_en} onChange={handleChange} /></div>
+                            <div className="space-y-2">
+                                <Label htmlFor="seating_options_en">Seating Options (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
+                                <TagInput id="seating_options_en" value={(formData.seating_options_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('seating_options_en', newValueString)} />
+                            </div>
+                            <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
+                        </>
                    )}
 
                    {/* === Experience Specific Fields === */}
-                   {formData.listing_type === 'Experience' && (
-                       <>
+                    {formData.listing_type === 'Experience' && (
+                        <>
                            <div className="space-y-2"><Label htmlFor="duration_en">Duration (English)</Label><Input id="duration_en" name="duration_en" value={formData.duration_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="highlights_en">Highlights (English)</Label><Input id="highlights_en" name="highlights_en" value={formData.highlights_en} onChange={handleChange} /></div>
+                           <div className="space-y-2">
+                                <Label htmlFor="highlights_en">Highlights (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
+                                <TagInput id="highlights_en" value={(formData.highlights_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('highlights_en', newValueString)} />
+                            </div>
                            <div className="space-y-2"><Label htmlFor="price_range_en">Price Range (English)</Label><Input id="price_range_en" name="price_range_en" value={formData.price_range_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="safety_tips_en">Safety Tips (English)</Label><Textarea id="safety_tips_en" name="safety_tips_en" value={formData.safety_tips_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                           <div className="space-y-2">
+                                <Label htmlFor="safety_tips_en">Safety Tips (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
+                                <TagInput id="safety_tips_en" value={(formData.safety_tips_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('safety_tips_en', newValueString)} />
+                            </div>
+                           <div className="space-y-2">
+                                <Label htmlFor="seating_options_en">Seating Options (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
+                                <TagInput id="seating_options_en" value={(formData.seating_options_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('seating_options_en', newValueString)} />
+                            </div>
                            <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
-                       </>
+                        </>
                    )}
 
                    {/* === Museum Specific Fields === */}
@@ -1339,10 +1473,19 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                            <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="tour_guide_availability_en">Tour Guide Availability (English)</Label><Input id="tour_guide_availability_en" name="tour_guide_availability_en" value={formData.tour_guide_availability_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                           <div className="space-y-2">
+                                <Label htmlFor="facilities_en">Facilities (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
+                                <TagInput id="facilities_en" value={(formData.facilities_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('facilities_en', newValueString)} />
+                            </div>
+                           <div className="space-y-2">
+                                <Label htmlFor="seating_options_en">Seating Options (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
+                                <TagInput id="seating_options_en" value={(formData.seating_options_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('seating_options_en', newValueString)} />
+                            </div>
                            <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="highlights_en">Highlights (English)</Label><Input id="highlights_en" name="highlights_en" value={formData.highlights_en} onChange={handleChange} /></div>
+                           <div className="space-y-2">
+                                <Label htmlFor="highlights_en">Highlights (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
+                                <TagInput id="highlights_en" value={(formData.highlights_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('highlights_en', newValueString)} />
+                            </div>
                        </>
                    )}
 
@@ -1353,8 +1496,14 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                            <div className="space-y-2"><Label htmlFor="entry_rules_en">Entry Rules (English)</Label><Textarea id="entry_rules_en" name="entry_rules_en" value={formData.entry_rules_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="facilities_en">Facilities (English)</Label><Input id="facilities_en" name="facilities_en" value={formData.facilities_en} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_en">Nearby Attractions (English)</Label><Input id="nearby_attractions_en" name="nearby_attractions_en" value={formData.nearby_attractions_en} onChange={handleChange} /></div>
+                           <div className="space-y-2">
+                                <Label htmlFor="facilities_en">Facilities (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
+                                <TagInput id="facilities_en" value={(formData.facilities_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('facilities_en', newValueString)} />
+                            </div>
+                           <div className="space-y-2">
+                                <Label htmlFor="seating_options_en">Seating Options (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
+                                <TagInput id="seating_options_en" value={(formData.seating_options_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('seating_options_en', newValueString)} />
+                            </div>
                            <div className="space-y-2"><Label htmlFor="parking_info_en">Parking Info (English)</Label><Input id="parking_info_en" name="parking_info_en" value={formData.parking_info_en} onChange={handleChange} /></div>
                        </>
                    )}
@@ -1369,33 +1518,52 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                   <div className="space-y-2"><Label htmlFor="name_ar">Name (Arabic) *</Label><Input dir="rtl" id="name_ar" name="name_ar" value={formData.name_ar} onChange={handleChange} required /></div>
                   <div className="space-y-2"><Label htmlFor="slug_ar">Slug (Arabic)</Label><Input dir="rtl" id="slug_ar" name="slug_ar" value={formData.slug_ar} onChange={handleChange} /></div>
                   <div className="space-y-2"><Label htmlFor="description_ar">Description (Arabic)</Label><Textarea dir="rtl" id="description_ar" name="description_ar" value={formData.description_ar} onChange={handleChange} /></div>
-                  <div className="space-y-2"><Label htmlFor="opening_hours_ar">Opening Hours (Arabic)</Label><Input dir="rtl" id="opening_hours_ar" name="opening_hours_ar" value={formData.opening_hours_ar} onChange={handleChange} /></div>
-
                   {/* === Shop/Mall Specific Fields === */}
                    {formData.listing_type === 'Shop/Mall' && (
                        <>
-                           <div className="space-y-2"><Label htmlFor="popular_stores_ar">Popular Stores (Arabic)</Label><Input dir="rtl" id="popular_stores_ar" name="popular_stores_ar" value={formData.popular_stores_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="entertainment_ar">Entertainment (Arabic)</Label><Input dir="rtl" id="entertainment_ar" name="entertainment_ar" value={formData.entertainment_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="dining_options_ar">Dining Options (Arabic)</Label><Input dir="rtl" id="dining_options_ar" name="dining_options_ar" value={formData.dining_options_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="special_services_ar">Special Services (Arabic)</Label><Input dir="rtl" id="special_services_ar" name="special_services_ar" value={formData.special_services_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
-                       </>
+                           <div className="space-y-2">
+                                <Label htmlFor="popular_stores_ar">Popular Stores (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                                <TagInput dir="rtl" id="popular_stores_ar" value={(formData.popular_stores_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('popular_stores_ar', newValueString)} />
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="entertainment_ar">Entertainment (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                                <TagInput dir="rtl" id="entertainment_ar" value={(formData.entertainment_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('entertainment_ar', newValueString)} />
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="dining_options_ar">Dining Options (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                                <TagInput dir="rtl" id="dining_options_ar" value={(formData.dining_options_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('dining_options_ar', newValueString)} />
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="special_services_ar">Special Services (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                                <TagInput dir="rtl" id="special_services_ar" value={(formData.special_services_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('special_services_ar', newValueString)} />
+                            </div>
+                            <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
+                        </>
                    )}
 
-                  {/* === Restaurant/Café Specific Fields === */}
+                    {/* === Restaurant/Café Specific Fields === */}
                    {formData.listing_type === 'Restaurant/Café' && (
                        <>
                            <div className="space-y-2"><Label htmlFor="cuisine_type_ar">Cuisine Type (Arabic)</Label><Input dir="rtl" id="cuisine_type_ar" name="cuisine_type_ar" value={formData.cuisine_type_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="story_behind_ar">Story Behind (Arabic)</Label><Textarea dir="rtl" id="story_behind_ar" name="story_behind_ar" value={formData.story_behind_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="menu_highlights_ar">Menu Highlights (Arabic)</Label><Input dir="rtl" id="menu_highlights_ar" name="menu_highlights_ar" value={formData.menu_highlights_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2">
+                                <Label htmlFor="menu_highlights_ar">Menu Highlights (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                                <TagInput dir="rtl" id="menu_highlights_ar" value={(formData.menu_highlights_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('menu_highlights_ar', newValueString)} />
+                            </div>
                            <div className="space-y-2"><Label htmlFor="price_range_ar">Price Range (Arabic)</Label><Input dir="rtl" id="price_range_ar" name="price_range_ar" value={formData.price_range_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="dietary_options_ar">Dietary Options (Arabic)</Label><Input dir="rtl" id="dietary_options_ar" name="dietary_options_ar" value={formData.dietary_options_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="reservation_info_ar">Reservation Info (Arabic)</Label><Input dir="rtl" id="reservation_info_ar" name="reservation_info_ar" value={formData.reservation_info_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="seating_options_ar">Seating Options (Arabic)</Label><Input dir="rtl" id="seating_options_ar" name="seating_options_ar" value={formData.seating_options_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="special_features_ar">Special Features (Arabic)</Label><Input dir="rtl" id="special_features_ar" name="special_features_ar" value={formData.special_features_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2">
+                                <Label htmlFor="dietary_options_ar">Dietary Options (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                                <TagInput dir="rtl" id="dietary_options_ar" value={(formData.dietary_options_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('dietary_options_ar', newValueString)} />
+                            </div>
+                           <div className="space-y-2">
+                                <Label htmlFor="special_features_ar">Special Features (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                                <TagInput dir="rtl" id="special_features_ar" value={(formData.special_features_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('special_features_ar', newValueString)} />
+                            </div>
                            <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2">
+                                <Label htmlFor="seating_options_ar">Seating Options (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                                <TagInput dir="rtl" id="seating_options_ar" value={(formData.seating_options_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('seating_options_ar', newValueString)} />
+                            </div>
                        </>
                    )}
 
@@ -1407,8 +1575,10 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                            <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="tour_guide_availability_ar">Tour Guide Availability (Arabic)</Label><Input dir="rtl" id="tour_guide_availability_ar" name="tour_guide_availability_ar" value={formData.tour_guide_availability_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2">
+                                <Label htmlFor="facilities_ar">Facilities (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                                <TagInput dir="rtl" id="facilities_ar" value={(formData.facilities_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('facilities_ar', newValueString)} />
+                            </div>
                            <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
                        </>
                    )}
@@ -1416,25 +1586,43 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                    {/* === Park/Nature Specific Fields === */}
                    {formData.listing_type === 'Park/Nature' && (
                        <>
-                           <div className="space-y-2"><Label htmlFor="activities_ar">Activities (Arabic)</Label><Input dir="rtl" id="activities_ar" name="activities_ar" value={formData.activities_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="safety_tips_ar">Safety Tips (Arabic)</Label><Textarea dir="rtl" id="safety_tips_ar" name="safety_tips_ar" value={formData.safety_tips_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="entry_fee_ar">Entry Fee (Arabic)</Label><Input dir="rtl" id="entry_fee_ar" name="entry_fee_ar" value={formData.entry_fee_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
-                       </>
+                           <div className="space-y-2">
+                                <Label htmlFor="activities_ar">Activities (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                                <TagInput dir="rtl" id="activities_ar" value={(formData.activities_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('activities_ar', newValueString)} />
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="facilities_ar">Facilities (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                                <TagInput dir="rtl" id="facilities_ar" value={(formData.facilities_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('facilities_ar', newValueString)} />
+                            </div>
+                            <div className="space-y-2"><Label htmlFor="safety_tips_ar">Safety Tips (Arabic)</Label><Textarea dir="rtl" id="safety_tips_ar" name="safety_tips_ar" value={formData.safety_tips_ar} onChange={handleChange} /></div>
+                            <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
+                            <div className="space-y-2"><Label htmlFor="entry_fee_ar">Entry Fee (Arabic)</Label><Input dir="rtl" id="entry_fee_ar" name="entry_fee_ar" value={formData.entry_fee_ar} onChange={handleChange} /></div>
+                            <div className="space-y-2">
+                                <Label htmlFor="seating_options_ar">Seating Options (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                                <TagInput dir="rtl" id="seating_options_ar" value={(formData.seating_options_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('seating_options_ar', newValueString)} />
+                            </div>
+                            <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
+                        </>
                    )}
 
                    {/* === Experience Specific Fields === */}
                    {formData.listing_type === 'Experience' && (
                        <>
                            <div className="space-y-2"><Label htmlFor="duration_ar">Duration (Arabic)</Label><Input dir="rtl" id="duration_ar" name="duration_ar" value={formData.duration_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="highlights_ar">Highlights (Arabic)</Label><Input dir="rtl" id="highlights_ar" name="highlights_ar" value={formData.highlights_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2">
+                                <Label htmlFor="highlights_ar">Highlights (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                                <TagInput dir="rtl" id="highlights_ar" value={(formData.highlights_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('highlights_ar', newValueString)} />
+                            </div>
                            <div className="space-y-2"><Label htmlFor="price_range_ar">Price Range (Arabic)</Label><Input dir="rtl" id="price_range_ar" name="price_range_ar" value={formData.price_range_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="safety_tips_ar">Safety Tips (Arabic)</Label><Textarea dir="rtl" id="safety_tips_ar" name="safety_tips_ar" value={formData.safety_tips_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2">
+                                <Label htmlFor="safety_tips_ar">Safety Tips (Arabic) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
+                                <TagInput dir="rtl" id="safety_tips_ar" value={(formData.safety_tips_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('safety_tips_ar', newValueString)} />
+                            </div>
+                           <div className="space-y-2">
+                                <Label htmlFor="seating_options_ar">Seating Options (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                                <TagInput dir="rtl" id="seating_options_ar" value={(formData.seating_options_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('seating_options_ar', newValueString)} />
+                            </div>
                            <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
                        </>
                    )}
@@ -1446,10 +1634,19 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                            <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="tour_guide_availability_ar">Tour Guide Availability (Arabic)</Label><Input dir="rtl" id="tour_guide_availability_ar" name="tour_guide_availability_ar" value={formData.tour_guide_availability_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2">
+                                <Label htmlFor="facilities_ar">Facilities (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                                <TagInput dir="rtl" id="facilities_ar" value={(formData.facilities_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('facilities_ar', newValueString)} />
+                            </div>
+                           <div className="space-y-2">
+                                <Label htmlFor="seating_options_ar">Seating Options (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                                <TagInput dir="rtl" id="seating_options_ar" value={(formData.seating_options_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('seating_options_ar', newValueString)} />
+                            </div>
                            <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="highlights_ar">Highlights (Arabic)</Label><Input dir="rtl" id="highlights_ar" name="highlights_ar" value={formData.highlights_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2">
+                                <Label htmlFor="highlights_ar">Highlights (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                                <TagInput dir="rtl" id="highlights_ar" value={(formData.highlights_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('highlights_ar', newValueString)} />
+                            </div>
                        </>
                    )}
 
@@ -1460,8 +1657,14 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                            <div className="space-y-2"><Label htmlFor="entry_rules_ar">Entry Rules (Arabic)</Label><Textarea dir="rtl" id="entry_rules_ar" name="entry_rules_ar" value={formData.entry_rules_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
                            <div className="space-y-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="facilities_ar">Facilities (Arabic)</Label><Input dir="rtl" id="facilities_ar" name="facilities_ar" value={formData.facilities_ar} onChange={handleChange} /></div>
-                           <div className="space-y-2"><Label htmlFor="nearby_attractions_ar">Nearby Attractions (Arabic)</Label><Input dir="rtl" id="nearby_attractions_ar" name="nearby_attractions_ar" value={formData.nearby_attractions_ar} onChange={handleChange} /></div>
+                           <div className="space-y-2">
+                                <Label htmlFor="facilities_ar">Facilities (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                                <TagInput dir="rtl" id="facilities_ar" value={(formData.facilities_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('facilities_ar', newValueString)} />
+                            </div>
+                           <div className="space-y-2">
+                                <Label htmlFor="seating_options_ar">Seating Options (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
+                                <TagInput dir="rtl" id="seating_options_ar" value={(formData.seating_options_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('seating_options_ar', newValueString)} />
+                            </div>
                            <div className="space-y-2"><Label htmlFor="parking_info_ar">Parking Info (Arabic)</Label><Input dir="rtl" id="parking_info_ar" name="parking_info_ar" value={formData.parking_info_ar} onChange={handleChange} /></div>
                        </>
                    )}
@@ -1469,85 +1672,102 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
              </Card>
          </div> {/* End Side-by-Side Container */}
 
-        {/* --- Categories Card --- */}
-         <Card>
-           <CardHeader><CardTitle>Categories</CardTitle></CardHeader>
-           <CardContent>
-               {categoriesLoading ? (
-                   <p>Loading categories...</p>
-               ) : combinedDisplayCategories.length > 0 ? ( // USE combinedDisplayCategories directly
-                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                      {combinedDisplayCategories.map(category => (
-                          <div key={category.id} className="flex items-center space-x-2">
-                              <Checkbox 
-                                  id={`category-${category.id}`}
-                                  checked={formData.categoryIds.includes(category.id)}
-                                  onCheckedChange={(checked: boolean | 'indeterminate') => handleCategoryChange(category.id, !!checked)}
-                              />
-                              <Label
-                                  htmlFor={`category-${category.id}`}
-                                  className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
-                              >
-                                  {category.name_en || '(No English Name)'} / {category.name_ar || '(No Arabic Name)'}
-                              </Label>
-                          </div>
-                      ))}
-                  </div>
-               ) : (
-                   <p>No categories found.</p>
-               )}
-           </CardContent>
-         </Card>
-
-        {/* --- Curated Collections Card --- */}
+        {/* --- Re-adding Opening Hours Card --- */}
         <Card>
           <CardHeader>
-            <CardTitle>Curated Collections</CardTitle>
+            <CardTitle>Opening Hours</CardTitle>
+            <CardDescription>Set the opening hours for each day of the week. This applies to both languages.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            {collectionsLoading ? (
-               <div className="flex justify-center items-center p-4"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
-            ) : availableCollections.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No collections available.</p>
-            ) : (
-              availableCollections.map((collection) => (
-                <div key={collection.id} className="flex items-center justify-between gap-4 rounded-md border p-3">
-                  <div className="flex items-center gap-3">
-                     <Checkbox
-                      id={`collection-${collection.id}`}
-                      checked={collectionSelections[collection.id]?.selected || false}
-                      // Pass boolean directly
-                      onCheckedChange={(checked) => handleCollectionChange(collection.id, !!checked)} 
-                    />
-                    <Label htmlFor={`collection-${collection.id}`} className="cursor-pointer">
-                      {collection.name_en}
-                    </Label>
-                  </div>
-                  {/* Conditional Switch */}
-                  {collectionSelections[collection.id]?.selected && (
-                     <div className="flex items-center gap-2">
-                         <Label htmlFor={`feature-${collection.id}`} className="text-sm text-muted-foreground">
-                           Feature on Home
-                         </Label>
-                         <Switch
-                             id={`feature-${collection.id}`}
-                             checked={collectionSelections[collection.id]?.featured || false}
-                             onCheckedChange={(checked) => handleFeatureChange(collection.id, checked)}
-                         />
-                     </div>
-                  )}
-                </div>
-              ))
-            )}
+          <CardContent>
+            <OpeningHoursInput
+              value={formData.opening_hours} // Use the new state field
+              onChange={handleOpeningHoursChange} // Use the new handler
+            />
           </CardContent>
         </Card>
+        {/* ------------------------------- */}
 
-        {/* Submit Buttons */}
+        {/* --- Categories Card (No Change) --- */}
+         <Card>
+             {/* ... same categories card ... */}
+             <CardHeader><CardTitle>Categories</CardTitle></CardHeader>
+            <CardContent>
+                 {categoriesLoading ? (
+                     <p>Loading categories...</p>
+               ) : combinedDisplayCategories.length > 0 ? ( 
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                        {combinedDisplayCategories.map(category => (
+                            <div key={category.id} className="flex items-center space-x-2">
+                                <Checkbox 
+                                    id={`category-${category.id}`}
+                                  checked={formData.categoryIds.includes(category.id)}
+                                    onCheckedChange={(checked: boolean | 'indeterminate') => handleCategoryChange(category.id, !!checked)}
+                                />
+                                <Label
+                                    htmlFor={`category-${category.id}`}
+                                    className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                                >
+                                    {category.name_en || '(No English Name)'} / {category.name_ar || '(No Arabic Name)'}
+                                </Label>
+                            </div>
+                        ))}
+                    </div>
+                 ) : (
+                     <p>No categories found.</p>
+                 )}
+             </CardContent>
+         </Card>
+
+        {/* --- Curated Collections Card (No Change) --- */}
+         <Card>
+           {/* ... same collections card ... */}
+            <CardHeader>
+            <CardTitle>Curated Collections</CardTitle>
+          </CardHeader>
+            <CardContent className="space-y-4">
+              {collectionsLoading ? (
+                 <div className="flex justify-center items-center p-4"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+              ) : availableCollections.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No collections available.</p>
+              ) : (
+                availableCollections.map((collection) => (
+                  <div key={collection.id} className="flex items-center justify-between gap-4 rounded-md border p-3">
+                    <div className="flex items-center gap-3">
+                       <Checkbox
+                        id={`collection-${collection.id}`}
+                        checked={collectionSelections[collection.id]?.selected || false}
+                        onCheckedChange={(checked) => handleCollectionChange(collection.id, !!checked)} 
+                      />
+                      <Label htmlFor={`collection-${collection.id}`} className="cursor-pointer">
+                        {collection.name_en}
+                      </Label>
+                    </div>
+                  {/* Conditional Switch */}
+                    {collectionSelections[collection.id]?.selected && (
+                       <div className="flex items-center gap-2">
+                           <Label htmlFor={`feature-${collection.id}`} className="text-sm text-muted-foreground">
+                             Feature on Home
+                           </Label>
+                           <Switch
+                               id={`feature-${collection.id}`}
+                               checked={collectionSelections[collection.id]?.featured || false}
+                               onCheckedChange={(checked) => handleFeatureChange(collection.id, checked)}
+                           />
+                       </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </CardContent>
+        </Card>
+
+        {/* Submit Buttons (Update disabled state) */}
         <div className="flex justify-end gap-3 mt-8">
           <Link href="/dashboard/listings">
              <Button type="button" variant="outline" disabled={saving}>Cancel</Button>
           </Link>
-          <Button type="submit" disabled={saving || isLoadingCoreData}>
+          {/* Disable submit if initial data is still loading OR saving is in progress */}
+          <Button type="submit" disabled={saving || isInitialDataLoading}> 
             {saving ? (
               <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...</>
             ) : (
@@ -1558,7 +1778,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
             )}
           </Button>
         </div>
-      </form>
-    </>
+       </form> 
+    </> 
   );
-} 
+}

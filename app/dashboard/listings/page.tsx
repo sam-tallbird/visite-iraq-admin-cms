@@ -16,23 +16,24 @@ import {
   CheckCircle,
   AlertCircle,
   ArrowUpDown,
-  RefreshCw
+  RefreshCw,
+  Image as ImageIcon
 } from "lucide-react";
 import Shell from "@/components/layout/shell";
 import { useSupabaseTable } from "@/hooks/use-supabase";
 import { useAuth } from "@/providers/auth-provider";
+import Image from 'next/image';
 
-// Define the Listing type - Simplified for debugging
+// Define the Listing type - Include photos_videos
 interface Listing {
   id: string;
-  // status?: "Published" | "Draft" | "Archived"; // Removed non-existent column
-  // created_at?: string | null;
-  // updated_at?: string | null;
+  photos_videos?: string[] | null;
   listing_translations: Array<{ 
     name: string;
     language_code: string;
   }>;
   name_en?: string | null; // Processed field
+  imageUrl?: string | null; // Processed field for public URL
 }
 
 // Define type for sorting fields - Simplified for debugging
@@ -40,7 +41,7 @@ type SortableListingField = 'name_en'; // Only name_en available for now
 
 export default function ListingsPage() {
   const router = useRouter();
-  const { user, loading: authLoading } = useAuth();
+  const { user, loading: authLoading, supabase } = useAuth();
   const [searchTerm, setSearchTerm] = useState("");
   // Default sort by name_en now
   const [sortField, setSortField] = useState<SortableListingField>("name_en"); 
@@ -49,7 +50,7 @@ export default function ListingsPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<{show: boolean, id: string | null}>({show: false, id: null});
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Use the Supabase hook - Simplified selectQuery for debugging
+  // Use the Supabase hook - UPDATED selectQuery
   const { 
     data: listingsData, 
     status, 
@@ -58,8 +59,8 @@ export default function ListingsPage() {
     remove: removeListing
   } = useSupabaseTable(
       'listings', 
-      // Fetch only id and translation name for now
-      { selectQuery: "id, listing_translations(name, language_code)" } 
+      // Fetch id, translation name, and related media URL/is_primary
+      { selectQuery: "id, listing_translations(name, language_code), media(url, is_primary)" } // UPDATED Query
     );
 
   // --- DEBUGGING LOGS --- 
@@ -70,19 +71,33 @@ export default function ListingsPage() {
   console.log("[ListingsPage] Raw listingsData:", listingsData);
   // --------------------
 
-  // --- useMemo hook --- 
+  // --- useMemo hook - Process Name and Image URL ---
   const listings = useMemo(() => {
-    if (!listingsData) return [];
+    if (!listingsData) return []; 
     const processedListings = listingsData.map((listing: any) => {
         const enTranslation = listing.listing_translations?.find((t: any) => t.language_code === 'en');
+        
+        // --- UPDATED Image Logic: Find primary image from media ---
+        let imageUrl = null;
+        const primaryMedia = listing.media?.find((m: any) => m.is_primary === true);
+        if (primaryMedia && primaryMedia.url) {
+             imageUrl = primaryMedia.url;
+        } else if (listing.media && listing.media.length > 0 && listing.media[0].url) {
+             // Fallback to the first media item if no primary is found
+             console.warn(`[ListingsPage] No primary image found for listing ${listing.id}. Falling back to first image.`);
+             imageUrl = listing.media[0].url;
+        }
+        // --- END UPDATED Image Logic ---
+
         return {
             ...listing,
-            name_en: enTranslation?.name || null 
+            name_en: enTranslation?.name || null, 
+            imageUrl: imageUrl, // Use the URL found from media table
         };
     }).filter(l => l !== null) as Listing[]; 
     console.log("[ListingsPage] Processed listings (after useMemo):", processedListings);
     return processedListings; 
-  }, [listingsData]);
+  }, [listingsData]); // REMOVED supabase dependency
 
   const loading = status === 'loading' || status === 'idle' || authLoading;
 
@@ -283,7 +298,21 @@ export default function ListingsPage() {
                         <tr key={listing.id} className="hover:bg-muted/50">
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-3">
-                              {/* Image can be added back later if needed */}
+                              {/* Display Image or Placeholder */}
+                              <div className="h-10 w-10 flex-shrink-0 rounded-sm bg-muted flex items-center justify-center overflow-hidden">
+                                {listing.imageUrl ? (
+                                  <Image 
+                                    src={listing.imageUrl} 
+                                    alt={listing.name_en || 'Listing image'} 
+                                    width={40} 
+                                    height={40} 
+                                    className="h-full w-full object-cover"
+                                    unoptimized={listing.imageUrl.includes('blob:')}
+                                  />
+                                ) : (
+                                  <ImageIcon className="h-5 w-5 text-muted-foreground" />
+                                )}
+                              </div>
                               <div>
                                 <div className="font-medium">{listing.name_en || `Listing ${listing.id.substring(0,6)}`}</div> 
                               </div>

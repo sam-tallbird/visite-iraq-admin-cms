@@ -32,7 +32,6 @@ interface ListingPutPayload {
         entertainment?: string[] | null;
         dining_options?: string[] | null;
         special_services?: string[] | null;
-        nearby_attractions?: string[] | null;
         parking_info?: string | null;
         cuisine_type?: string | null;
         story_behind?: string | null;
@@ -122,8 +121,39 @@ export async function PUT(
             locationIdToLink = upsertedLocationData?.id || null;
             console.log(`[API PUT /api/listings/${listingId}] Location ID after place_id upsert: ${locationIdToLink}`);
         }
+        // --- NEW LOGIC START ---
+        // If location ID is still null, but we have address/city data, create a new location record
+        else if (!locationIdToLink && (locationTranslations.address_en || locationTranslations.address_ar || locationTranslations.city_en || locationTranslations.city_ar)) {
+            console.log(`[API PUT /api/listings/${listingId}] No google_place_id or existing location_id found, but address/city data exists. Creating new location.`);
+
+            // Insert a new basic location record (assuming lat/lng/place_id can be null)
+            const { data: newLocationData, error: newLocationError } = await supabase
+                .from('locations')
+                .insert([
+                    // Add any default/required fields if necessary, otherwise leave empty
+                    // to rely on database defaults or nullability
+                    {} 
+                ]) 
+                .select('id')
+                .single();
+
+            if (newLocationError) {
+                console.error(`[API PUT /api/listings/${listingId}] Error creating new location:`, newLocationError);
+                throw new Error(`Failed to create new location: ${newLocationError.message}`);
+            }
+
+            locationIdToLink = newLocationData?.id || null;
+            console.log(`[API PUT /api/listings/${listingId}] New location created with ID: ${locationIdToLink}`);
+
+            if (!locationIdToLink) {
+                 // This shouldn't happen if the insert was successful, but handle defensively
+                 console.error(`[API PUT /api/listings/${listingId}] Failed to retrieve ID for newly created location.`);
+                 throw new Error('Failed to get ID for the new location.');
+            }
+        }
+        // --- NEW LOGIC END ---
         
-        // If we have a location ID (either existing or from upsert) and address/city data, upsert translations
+        // If we have a location ID (either existing or from upsert/insert) and address/city data, upsert translations
         if (locationIdToLink && (locationTranslations.address_en || locationTranslations.address_ar || locationTranslations.city_en || locationTranslations.city_ar)) {
             console.log(`[API PUT /api/listings/${listingId}] Upserting location translations for location ID: ${locationIdToLink}`);
             const locationTranslationsToUpsert = [];
@@ -152,10 +182,19 @@ export async function PUT(
 
             if (locationTranslationsToUpsert.length > 0) {
                  console.log(`[API PUT /api/listings/${listingId}] Location translations to upsert:`, JSON.stringify(locationTranslationsToUpsert, null, 2)); // Added log
-                 const { error: locTransError } = await supabase
+                 
+                 // ---> ADD LOG HERE <---
+                 console.log(`[API PUT /api/listings/${listingId}] Data for location_translations upsert:`, JSON.stringify(locationTranslationsToUpsert, null, 2));
+                 // ---------------------
+                 
+                 const { data: locTransResult, error: locTransError } = await supabase // Capture result too
                     .from('location_translations')
                     .upsert(locationTranslationsToUpsert, { onConflict: 'location_id, language_code' });
                 
+                 // ---> ADD LOG HERE <---
+                 console.log(`[API PUT /api/listings/${listingId}] Result from location_translations upsert:`, { data: locTransResult, error: locTransError });
+                 // ---------------------
+
                  if (locTransError) {
                      console.error(`[API PUT /api/listings/${listingId}] Error upserting location translations:`, locTransError);
                      throw new Error(`Failed to upsert location translations: ${locTransError.message}`);
@@ -178,10 +217,18 @@ export async function PUT(
             // Include other direct fields from listingData if needed
         };
 
-        const { error: listingUpdateError } = await supabase
+        // ---> ADD LOG HERE <---
+        console.log(`[API PUT /api/listings/${listingId}] Data for listings update:`, JSON.stringify(listingUpdateData, null, 2));
+        // ---------------------
+
+        const { data: listingUpdateResult, error: listingUpdateError } = await supabase // Capture result too
             .from('listings')
             .update(listingUpdateData)
             .eq('id', listingId);
+
+        // ---> ADD LOG HERE <---
+        console.log(`[API PUT /api/listings/${listingId}] Result from listings update:`, { data: listingUpdateResult, error: listingUpdateError });
+        // ---------------------
 
         if (listingUpdateError) {
             console.error(`[API PUT /api/listings/${listingId}] Error updating listing table:`, listingUpdateError);
@@ -303,10 +350,46 @@ export async function GET(
 
     console.log(`[API GET /api/listings/${listingId}] Received request.`);
 
+    // Handle the 'all' case specifically
+    if (listingId === 'all') {
+        console.log(`[API GET /api/listings/all] Fetching all listings.`);
+        try {
+            // Query to fetch all listings - adjust select as needed
+            const { data, error } = await supabase
+                .from('listings')
+                .select(`
+                    *,
+                    listing_translations ( * ),
+                    listing_categories ( category_id ),
+                    locations ( *,
+                        location_translations ( * )
+                    )
+                `)
+                .order('created_at', { ascending: false }); // Optional: order results
+
+            if (error) {
+                console.error(`[API GET /api/listings/all] Error fetching all listings:`, error);
+                throw error;
+            }
+
+            console.log(`[API GET /api/listings/all] Fetched ${data?.length || 0} listings successfully.`);
+            return NextResponse.json(data || [], { status: 200 }); // Return empty array if null
+
+        } catch (error: any) {
+            console.error(`[API GET /api/listings/all] Error processing request:`, error);
+            return NextResponse.json({ message: error.message || 'Internal Server Error fetching all listings' }, { status: 500 });
+        }
+    }
+
+    // Proceed with fetching a single listing if ID is not 'all'
     if (!listingId) {
+        // This check might be redundant now if 'all' is handled above, 
+        // but keep it for safety in case of empty param somehow
         return NextResponse.json({ message: 'Listing ID is required' }, { status: 400 });
     }
 
+    // --- Existing logic for single listing fetch ---
+    console.log(`[API GET /api/listings/${listingId}] Fetching single listing by ID.`);
     try {
         const { data, error } = await supabase
             .from('listings')
@@ -318,15 +401,21 @@ export async function GET(
                     location_translations ( * )
                 )
             `)
-            .eq('id', listingId)
-            .maybeSingle(); // Use maybeSingle() in case the ID doesn't exist
+            .eq('id', listingId) // The original filter for a single ID
+            .maybeSingle();
 
         if (error) {
+            // Handle potential PostgREST error if listingId is not a valid UUID
+            if (error.code === '22P02') { // invalid_text_representation
+                console.error(`[API GET /api/listings/${listingId}] Invalid UUID format provided.`);
+                return NextResponse.json({ message: `Invalid ID format: ${listingId}` }, { status: 400 });
+            }
             console.error(`[API GET /api/listings/${listingId}] Error fetching listing:`, error);
             throw error;
         }
 
         if (!data) {
+            console.log(`[API GET /api/listings/${listingId}] Listing not found.`);
             return NextResponse.json({ message: 'Listing not found' }, { status: 404 });
         }
 
@@ -335,7 +424,14 @@ export async function GET(
 
     } catch (error: any) {
         console.error(`[API GET /api/listings/${listingId}] Error processing request:`, error);
-        return NextResponse.json({ message: error.message || 'Internal Server Error' }, { status: 500 });
+        // Ensure specific UUID error isn't caught here again if already handled
+        if (error.code !== '22P02') { 
+            return NextResponse.json({ message: error.message || 'Internal Server Error' }, { status: 500 });
+        }
+        // If it was the UUID error already handled, we don't need to return another 500
+        // The 400 response should have already been sent.
+        // However, standard practice might be to let the framework handle final response.
+        // For clarity, let's just ensure we don't double-send a response.
     }
 }
 

@@ -21,6 +21,11 @@
       "static/chunks/main-app.js",
       "static/chunks/app/dashboard/listings/page.js"
     ],
+    "/dashboard/listings/[id]/edit/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/dashboard/listings/[id]/edit/page.js"
+    ],
     "/dashboard/listings/new/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
