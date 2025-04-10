@@ -243,9 +243,9 @@ export default function CategoriesPage() {
         // Update Arabic translation
         if (selectedCategory.translation_ar_id) {
             const updateArData = {
-                name: nameAr.trim()
-                 // Add description, slug updates if needed
-                // Typically icon is not updated on AR if primarily stored on EN
+                name: nameAr.trim(),
+                icon_url: imageUrl || null // Add icon URL to Arabic translation
+                // Add description, slug updates if needed
             };
             updateArPromise = updateTranslationRow(selectedCategory.translation_ar_id, updateArData);
         } else {
