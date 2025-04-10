@@ -257,7 +257,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
     tips_en: string;
     activities_en: string[]; 
     facilities_en: string[]; 
-    safety_tips_en: string[]; 
+    safety_tips_en: string; 
     duration_en: string;
     highlights_en: string[]; 
     religious_significance_en: string;
@@ -285,7 +285,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
     tips_ar: string;
     activities_ar: string[]; 
     facilities_ar: string[]; 
-    safety_tips_ar: string[]; 
+    safety_tips_ar: string; 
     duration_ar: string;
     highlights_ar: string[]; 
     religious_significance_ar: string;
@@ -342,7 +342,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
     tips_en: "",
     activities_en: [], 
     facilities_en: [], 
-    safety_tips_en: [], 
+    safety_tips_en: "", 
     duration_en: "",
     highlights_en: [], 
     religious_significance_en: "",
@@ -369,7 +369,7 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
     tips_ar: "",
     activities_ar: [], 
     facilities_ar: [], 
-    safety_tips_ar: [], 
+    safety_tips_ar: "", 
     duration_ar: "",
     highlights_ar: [], 
     religious_significance_ar: "",
@@ -687,7 +687,8 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
               tips_en: en.tips || "",
               activities_en: en.activities || [],
               facilities_en: en.facilities || [],
-              safety_tips_en: typeof en.safety_tips === 'string' ? en.safety_tips.split(',').map(s => s.trim()).filter(Boolean) : (en.safety_tips || []), // Ensure array
+              // Convert safety_tips array from DB to comma-separated string, handle potential non-array values
+              safety_tips_en: (Array.isArray(en.safety_tips) ? en.safety_tips.join(', ') : typeof en.safety_tips === 'string' ? en.safety_tips : '') || "", 
               duration_en: en.duration || "",
               highlights_en: en.highlights || [],
               religious_significance_en: en.religious_significance || "",
@@ -715,7 +716,8 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
               tips_ar: ar.tips || "",
               activities_ar: ar.activities || [],
               facilities_ar: ar.facilities || [],
-              safety_tips_ar: typeof ar.safety_tips === 'string' ? ar.safety_tips.split(',').map(s => s.trim()).filter(Boolean) : (ar.safety_tips || []), // Ensure array
+              // Convert safety_tips array from DB to comma-separated string, handle potential non-array values, fallback to EN string
+              safety_tips_ar: (Array.isArray(ar.safety_tips) ? ar.safety_tips.join(', ') : typeof ar.safety_tips === 'string' ? ar.safety_tips : '') || (Array.isArray(en.safety_tips) ? en.safety_tips.join(', ') : typeof en.safety_tips === 'string' ? en.safety_tips : '') || "", 
               duration_ar: ar.duration || "",
               highlights_ar: ar.highlights || [],
               religious_significance_ar: ar.religious_significance || "",
@@ -1020,7 +1022,8 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
         tips: formData.tips_en,
         activities: formData.activities_en,
         facilities: formData.facilities_en,
-        safety_tips: formData.safety_tips_en, // Assuming backend expects array now
+        // Convert safety_tips array from DB to comma-separated string, handle potential non-array values
+        safety_tips: formData.safety_tips_en ? formData.safety_tips_en.split(',').map(s => s.trim()).filter(Boolean) : null, 
         duration: formData.duration_en,
         highlights: formData.highlights_en,
         religious_significance: formData.religious_significance_en,
@@ -1052,7 +1055,8 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
         tips: formData.tips_ar,
         activities: formData.activities_ar,
         facilities: formData.facilities_ar,
-        safety_tips: formData.safety_tips_ar, // Assuming backend expects array now
+        // Convert comma-separated string back to array for submission, or null if empty
+        safety_tips: formData.safety_tips_ar ? formData.safety_tips_ar.split(',').map(s => s.trim()).filter(Boolean) : null, 
         duration: formData.duration_ar,
         highlights: formData.highlights_ar,
         religious_significance: formData.religious_significance_ar,
@@ -1556,9 +1560,18 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                                 <Label htmlFor="facilities_en">Facilities (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
                                 <TagInput id="facilities_en" value={(formData.facilities_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('facilities_en', newValueString)} />
                             </div>
-                            <div className="space-y-2"><Label htmlFor="safety_tips_en">Safety Tips (English)</Label><Textarea id="safety_tips_en" name="safety_tips_en" value={formData.safety_tips_en} onChange={handleChange} /></div>
+                            <div className="space-y-2">
+                             <Label htmlFor="safety_tips_en">Safety Tips (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
+                             <Input 
+                                 id="safety_tips_en"
+                                 name="safety_tips_en"
+                                 value={formData.safety_tips_en} 
+                                 onChange={handleChange} 
+                                 placeholder="e.g., Wear good shoes, Bring water, Stay on trail"
+                                 disabled={saving}
+                             />
+                         </div>
                             <div className="space-y-2"><Label htmlFor="best_time_to_visit_en">Best Time to Visit (English)</Label><Input id="best_time_to_visit_en" name="best_time_to_visit_en" value={formData.best_time_to_visit_en} onChange={handleChange} /></div>
-                            <div className="space-y-2"><Label htmlFor="entry_fee_en">Entry Fee (English)</Label><Input id="entry_fee_en" name="entry_fee_en" value={formData.entry_fee_en} onChange={handleChange} /></div>
                             {/* --- REPLACE Input with Select for parking_info_en (Park/Nature) --- */}
                             <div className="space-y-2">
                                <Label htmlFor="parking_info_en">Parking Info (English)</Label>
@@ -1602,7 +1615,14 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                            <div className="space-y-2"><Label htmlFor="tips_en">Tips (English)</Label><Textarea id="tips_en" name="tips_en" value={formData.tips_en} onChange={handleChange} /></div>
                            <div className="space-y-2">
                                 <Label htmlFor="safety_tips_en">Safety Tips (English) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
-                                <TagInput id="safety_tips_en" value={(formData.safety_tips_en || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('safety_tips_en', newValueString)} />
+                                <Input 
+                                    id="safety_tips_en"
+                                    name="safety_tips_en"
+                                    value={formData.safety_tips_en} 
+                                    onChange={handleChange} 
+                                    placeholder="e.g., Wear good shoes, Bring water, Stay on trail"
+                                    disabled={saving}
+                                />
                             </div>
                            {/* --- REPLACE Input with Select for parking_info_en (Experience) --- */}
                            <div className="space-y-2">
@@ -1850,7 +1870,18 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                                 <Label htmlFor="facilities_ar">Facilities (Arabic) <span className="text-muted-foreground text-xs">(علامات)</span></Label>
                                 <TagInput dir="rtl" id="facilities_ar" value={(formData.facilities_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('facilities_ar', newValueString)} />
                             </div>
-                            <div className="space-y-2"><Label htmlFor="safety_tips_ar">Safety Tips (Arabic)</Label><Textarea dir="rtl" id="safety_tips_ar" name="safety_tips_ar" value={formData.safety_tips_ar} onChange={handleChange} /></div>
+                            <div className="space-y-2">
+                             <Label htmlFor="safety_tips_ar">Safety Tips (Arabic) <span className="text-muted-foreground text-xs">(مفصولة بفواصل)</span></Label>
+                             <Input 
+                                 dir="rtl"
+                                 id="safety_tips_ar"
+                                 name="safety_tips_ar"
+                                 value={formData.safety_tips_ar} 
+                                 onChange={handleChange} 
+                                 placeholder="مثال: ارتدِ أحذية جيدة، أحضر ماء، ابق على الطريق"
+                                 disabled={saving}
+                             />
+                         </div>
                             <div className="space-y-2"><Label htmlFor="best_time_to_visit_ar">Best Time to Visit (Arabic)</Label><Input dir="rtl" id="best_time_to_visit_ar" name="best_time_to_visit_ar" value={formData.best_time_to_visit_ar} onChange={handleChange} /></div>
                             <div className="space-y-2"><Label htmlFor="entry_fee_ar">Entry Fee (Arabic)</Label><Input dir="rtl" id="entry_fee_ar" name="entry_fee_ar" value={formData.entry_fee_ar} onChange={handleChange} /></div>
                             {/* --- REPLACE Input with Select for parking_info_ar (Park/Nature) --- */}
@@ -1897,8 +1928,16 @@ export function EditListingForm({ listingId }: EditListingFormProps) {
                            {/* --------------------------------------------------------- */}
                            <div className="space-y-2"><Label htmlFor="tips_ar">Tips (Arabic)</Label><Textarea dir="rtl" id="tips_ar" name="tips_ar" value={formData.tips_ar} onChange={handleChange} /></div>
                            <div className="space-y-2">
-                                <Label htmlFor="safety_tips_ar">Safety Tips (Arabic) <span className="text-muted-foreground text-xs">(comma-separated)</span></Label>
-                                <TagInput dir="rtl" id="safety_tips_ar" value={(formData.safety_tips_ar || []).join(',')} onTagsChange={(newValueString: string) => handleGenericTagInputChange('safety_tips_ar', newValueString)} />
+                                <Label htmlFor="safety_tips_ar">Safety Tips (Arabic) <span className="text-muted-foreground text-xs">(مفصولة بفواصل)</span></Label>
+                                <Input 
+                                    dir="rtl"
+                                    id="safety_tips_ar"
+                                    name="safety_tips_ar"
+                                    value={formData.safety_tips_ar} 
+                                    onChange={handleChange} 
+                                    placeholder="مثال: ارتدِ أحذية جيدة، أحضر ماء، ابق على الطريق"
+                                    disabled={saving}
+                                />
                             </div>
                            {/* --- REPLACE Input with Select for parking_info_ar (Experience) --- */}
                            <div className="space-y-2">
